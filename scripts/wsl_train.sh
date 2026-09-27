@@ -5,7 +5,7 @@
 # Do Git Bash:
 #   MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_train.sh \
 #     <prefixo> <id> <épocas> [wdl] [lr]
-# - <prefixo>: usa datagen/<prefixo>-*.txt.
+# - <prefixo>: usa datagen/<prefixo>-*.txt e datagen/<prefixo>-*.txt.gz (trazidos da AWS).
 # - Cada superbatch do treino é uma época (uma passada pelos dados).
 # - A rede final vai para nets/<id>.nnue; os checkpoints ficam em ~/nnue/<id>/checkpoints.
 # - As últimas 1% das linhas de cada arquivo (as partidas mais recentes) ficam fora do treino, em
@@ -24,11 +24,15 @@ rm -rf "$HOME/caipora-trainer" && cp -r "$REPO/trainer" "$HOME/caipora-trainer"
 WORK=$HOME/nnue/$ID
 mkdir -p "$WORK" && cd "$WORK"
 rm -f part-*.bin part-*.txt validation.txt
-for f in "$REPO"/datagen/"$PREFIX"-*.txt; do
-  name=$(basename "$f" .txt)
-  lines=$(wc -l < "$f")
+for f in "$REPO"/datagen/"$PREFIX"-*.txt "$REPO"/datagen/"$PREFIX"-*.txt.gz; do
+  [ -e "$f" ] || continue
+  name=$(basename "$f"); name=${name%.gz}; name=${name%.txt}
+  # Fotografia só com linhas completas (o datagen pode estar escrevendo; .gz vem da AWS).
+  zcat -f "$f" > raw.txt
+  lines=$(wc -l < raw.txt)
   held=$(( lines / 100 ))
-  head -n "$lines" "$f" > snapshot.txt
+  head -n "$lines" raw.txt > snapshot.txt
+  rm raw.txt
   head -n $(( lines - held )) snapshot.txt > "part-$name.txt"
   tail -n "$held" snapshot.txt >> validation.txt
   rm snapshot.txt
@@ -37,8 +41,13 @@ for f in "$REPO"/datagen/"$PREFIX"-*.txt; do
   rm "part-$name.txt" "part-$name.bin"
   echo "$name: $(( lines - held )) posições de treino, $held de validação"
 done
-"$UTILS" interleave part-*-shuf.bin --output data.bin > /dev/null
-rm part-*-shuf.bin
+shuffled=(part-*-shuf.bin)
+if [ "${#shuffled[@]}" -eq 1 ]; then
+  mv "${shuffled[0]}" data.bin   # o interleave exige pelo menos 2 arquivos
+else
+  "$UTILS" interleave "${shuffled[@]}" --output data.bin > /dev/null
+  rm "${shuffled[@]}"
+fi
 POSITIONS=$(( $(stat -c %s data.bin) / 32 ))
 BATCHES=$(( POSITIONS / 16384 ))
 echo "total: $POSITIONS posições, $BATCHES lotes por época, $EPOCHS épocas, wdl $WDL, lr $LR"
