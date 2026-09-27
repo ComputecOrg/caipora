@@ -15,7 +15,9 @@
 #       SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]) em segundo plano, numa pasta por tag.
 #       Várias tags podem rodar juntas, repartindo os núcleos. CAIPORA_SPRT_EACH troca as opções
 #       dos dois lados (ex.: "tc=8+0.08 option.Hash=16", para relógio) e CAIPORA_SPRT_NEW_OPTS
-#       acrescenta opções só ao lado novo (ex.: "option.Threads=2").
+#       acrescenta opções só ao lado novo (ex.: "option.Threads=2"). CAIPORA_SPRT_FILES envia
+#       outros arquivos para ~/caipora/bin (ex.: uma rede, usada com
+#       CAIPORA_SPRT_NEW_OPTS="option.EvalFile=/home/ubuntu/caipora/bin/<rede>").
 #   deploy/aws_spot.sh sprt-status <id>
 #       Placar de cada SPRT (partidas, Elo, LLR, se terminou e as terminações).
 #   deploy/aws_spot.sh sprt-fetch <id>
@@ -157,7 +159,8 @@ case "$cmd" in
     ip=$(ip_of "$id")
     ssh_ "$ip" "mkdir -p ~/caipora/bin ~/caipora/sprt/$tag"
     # Só envia o que ainda não está lá: um binário em uso por outro SPRT não pode ser sobrescrito.
-    for bin in "$new" "$base"; do
+    # shellcheck disable=SC2086 # CAIPORA_SPRT_FILES é uma lista separada por espaços.
+    for bin in "$new" "$base" ${CAIPORA_SPRT_FILES:-}; do
       ssh_ "$ip" "test -f ~/caipora/bin/$(basename "$bin")" ||
         scp -q -i "$KEY" -o UserKnownHostsFile="$KNOWN" "$bin" "ubuntu@$ip:caipora/bin/"
     done
