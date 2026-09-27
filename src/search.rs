@@ -292,6 +292,7 @@ impl Searcher {
                 pv: Vec::new(),
             };
         };
+        self.tt.new_search();
         let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
         hashes.extend_from_slice(history);
         hashes.push(root.hash());
