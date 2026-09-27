@@ -13,7 +13,9 @@
 #       Traz os arquivos datagen/<prefixo>-*.txt, compactados.
 #   deploy/aws_spot.sh sprt <id> <binário novo> <binário base> <tag> <concorrência> [semente]
 #       SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]) em segundo plano, numa pasta por tag.
-#       Várias tags podem rodar juntas, repartindo os núcleos.
+#       Várias tags podem rodar juntas, repartindo os núcleos. CAIPORA_SPRT_EACH troca as opções
+#       dos dois lados (ex.: "tc=8+0.08 option.Hash=16", para relógio) e CAIPORA_SPRT_NEW_OPTS
+#       acrescenta opções só ao lado novo (ex.: "option.Threads=2").
 #   deploy/aws_spot.sh sprt-status <id>
 #       Placar de cada SPRT (partidas, Elo, LLR, se terminou e as terminações).
 #   deploy/aws_spot.sh sprt-fetch <id>
@@ -167,9 +169,9 @@ case "$cmd" in
         chmod +x fastchess
       fi
       cd sprt/$tag && nohup ../../fastchess \
-        -engine cmd=../../bin/$(basename "$new") name=novo \
+        -engine cmd=../../bin/$(basename "$new") name=novo ${CAIPORA_SPRT_NEW_OPTS:-} \
         -engine cmd=../../bin/$(basename "$base") name=base \
-        -each tc=60+1 nodes=100000 option.Hash=16 \
+        -each ${CAIPORA_SPRT_EACH:-tc=60+1 nodes=100000 option.Hash=16} \
         -openings file=../../8moves_v3.epd format=epd order=random -srand $seed \
         -rounds 20000 -games 2 -repeat -concurrency $conc -recover \
         -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 \
