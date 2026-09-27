@@ -1,0 +1,20 @@
+[Unit]
+Description=Caipora no Lichess (lichess-bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=caipora
+WorkingDirectory=/opt/caipora/lichess-bot
+# Só a linha LICHESS_BOT_TOKEN=..., arquivo do root com permissão 600.
+EnvironmentFile=/etc/caipora-bot.env
+ExecStart=/opt/caipora/lichess-bot/venv/bin/python lichess-bot.py -v --logfile /opt/caipora/lichess-bot/bot.log
+Restart=on-failure
+RestartSec=30
+# Como o Ctrl+C: o lichess-bot termina as partidas em andamento antes de sair.
+KillSignal=SIGINT
+TimeoutStopSec=1800
+
+[Install]
+WantedBy=multi-user.target
