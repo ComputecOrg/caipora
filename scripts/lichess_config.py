@@ -38,7 +38,11 @@ def merge(base: dict, overrides: dict) -> None:
 
 
 def overrides(
-    engine_path: str, rated: bool, matchmaking: bool, rating_range: tuple[int, int]
+    engine_path: str,
+    rated: bool,
+    matchmaking: bool,
+    rating_range: tuple[int, int],
+    move_overhead: int,
 ) -> dict:
     return {
         "token": "",
@@ -62,8 +66,9 @@ def overrides(
             },
             "draw_or_resign": {"resign_enabled": False},
         },
-        # Do Brasil são ~200 ms por lance até Gravelines, sem compensação de lag para bots.
-        "move_overhead": 2000,
+        # Folga por lance para a latência até o Lichess, que não compensa lag de bots: ~200 ms do
+        # Brasil (padrão 2000), ~90 ms do servidor nos EUA.
+        "move_overhead": move_overhead,
         "quit_after_all_games_finish": True,
         "pgn_directory": "game_records",
         "challenge": {
@@ -146,12 +151,21 @@ def main() -> int:
         metavar=("MIN", "MAX"),
         help="faixa de rating dos bots desafiados",
     )
+    parser.add_argument(
+        "--move-overhead",
+        type=int,
+        default=2000,
+        help="folga por lance em ms (padrão 2000, pensado para ~200 ms de latência)",
+    )
     args = parser.parse_args()
     rating_range = (args.opponent_rating[0], args.opponent_rating[1])
 
     with open("config.yml.default", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
-    merge(config, overrides(args.engine, args.rated, args.matchmaking, rating_range))
+    merge(
+        config,
+        overrides(args.engine, args.rated, args.matchmaking, rating_range, args.move_overhead),
+    )
     # Sem a chave o lichess-bot usa os limites absolutos; com valor vazio o validador dele falha.
     config["matchmaking"].pop("opponent_rating_difference", None)
     config["engine"]["uci_options"] = dict(UCI_OPTIONS)
@@ -166,7 +180,8 @@ def main() -> int:
     print("config.yml gerado")
     print(f"opções UCI: {config['engine']['uci_options']}")
     print(f"matchmaking: {'ligado' if args.matchmaking else 'desligado'}, bots de {rating_range[0]} a "
-          f"{rating_range[1]}, {'rated' if args.rated else 'casual'}")
+          f"{rating_range[1]}, {'rated' if args.rated else 'casual'}, "
+          f"folga {args.move_overhead} ms")
 
     # Validação com o próprio carregador do lichess-bot (não acessa a rede).
     sys.path.insert(0, os.getcwd())
