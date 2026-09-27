@@ -49,7 +49,7 @@ release). O CI (só Linux) roda ainda: suítes de perft, **assinatura do bench**
 fastchess num build de debug (falha em terminação anormal, lance ilegal ou travamento).
 
 ## Bench
-- `cargo run --release -- bench` (profundidade padrão 7, 48 posições fixas). Todo commit que muda
+- `cargo run --release -- bench` (profundidade padrão 12, 48 posições fixas). Todo commit que muda
   o que a busca faz termina com `Bench: <nós>`; os que não mudam, com `No functional change`.
 - A assinatura só pode mudar de propósito. Se mudou sem querer, é bug.
 
