@@ -9,6 +9,7 @@ use crate::eval::evaluate;
 use crate::movegen::{generate_legal, generate_pseudo_legal};
 use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
 use crate::position::Position;
+use crate::see::see;
 use crate::timeman::Limits;
 use crate::tt::{Bound, TranspositionTable};
 use crate::types::{Color, PieceType};
@@ -28,6 +29,9 @@ const LMP_MAX_DEPTH: i32 = 8;
 const FUTILITY_MAX_DEPTH: i32 = 6;
 const FUTILITY_BASE: i32 = 100;
 const FUTILITY_MARGIN: i32 = 100;
+const SEE_PRUNE_MAX_DEPTH: i32 = 8;
+const SEE_QUIET_MARGIN: i32 = 50;
+const SEE_CAPTURE_MARGIN: i32 = 100;
 
 /// Quantos lances um nó de profundidade `depth` busca antes de o LMP podar os quietos restantes.
 fn lmp_threshold(depth: i32, improving: bool) -> usize {
@@ -413,9 +417,20 @@ impl SearchState<'_> {
             legal += 1;
             let quiet = !is_tactical(pos, mv);
             let new_depth = depth - 1;
-            let prunable =
-                !pv_node && !in_check && quiet && best_score > -MATE_BOUND && !next.in_check();
-            if prunable {
+            let prunable = !pv_node && !in_check && best_score > -MATE_BOUND && !next.in_check();
+            if prunable && depth <= SEE_PRUNE_MAX_DEPTH {
+                // Lance que, na troca de peças na casa de destino, perde material demais para a
+                // profundidade que resta.
+                let margin = if quiet {
+                    SEE_QUIET_MARGIN
+                } else {
+                    SEE_CAPTURE_MARGIN
+                };
+                if see(pos, mv) < -margin * depth {
+                    continue;
+                }
+            }
+            if prunable && quiet {
                 // Late move pruning: em nível raso, depois de muitos quietos, o resto quase nunca
                 // presta.
                 if depth <= LMP_MAX_DEPTH && legal > lmp_threshold(depth, improving) {
@@ -535,7 +550,7 @@ impl SearchState<'_> {
         let mut legal = 0;
         for index in 0..moves.len() {
             let mv = pick_next(&mut moves, &mut scores, index);
-            if !in_check && !is_tactical(pos, mv) {
+            if !in_check && (!is_tactical(pos, mv) || see(pos, mv) < 0) {
                 continue;
             }
             let next = pos.make_move(mv);
@@ -671,7 +686,12 @@ fn score_moves(
             let attacker = pos
                 .piece_at(mv.from())
                 .map_or(0, |p| ORDER_VALUE[p.kind.index()]);
-            100_000 + 10 * ORDER_VALUE[victim.index()] - attacker
+            let mvv_lva = 10 * ORDER_VALUE[victim.index()] - attacker;
+            if see(pos, mv) >= 0 {
+                100_000 + mvv_lva
+            } else {
+                -100_000 + mvv_lva
+            }
         } else if mv.kind() == MoveKind::Promotion(PieceType::Queen) {
             90_000
         } else if Some(mv) == killers[0] {
@@ -924,9 +944,10 @@ mod tests {
 
     #[test]
     fn move_ordering_puts_killers_between_captures_and_quiets() {
-        // Brancas: Nxe5 (captura), Nf3-g5 (killer), Bc4-b5 (com histórico), a2-a3 (nada).
+        // Brancas: Nxe5 ganha um peão solto; Nf3-g5 é killer; Bc4-b5 tem histórico; a2-a3 não
+        // tem nada; Bxf7+ perde o bispo para o rei (captura ruim, vai para depois dos quietos).
         let pos =
-            Position::from_fen("r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1")
+            Position::from_fen("rnbqkbnr/pppp1ppp/8/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1")
                 .unwrap();
         let mut moves = MoveList::new();
         generate_pseudo_legal(&pos, &mut moves);
@@ -952,6 +973,7 @@ mod tests {
         assert!(score_of("f3e5") > score_of("f3g5"));
         assert!(score_of("f3g5") > score_of("c4b5"));
         assert!(score_of("c4b5") > score_of("a2a3"));
+        assert!(score_of("a2a3") > score_of("c4f7"));
     }
 
     #[test]
