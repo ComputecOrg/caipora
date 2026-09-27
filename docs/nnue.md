@@ -37,6 +37,23 @@ done
   CUDA_PATH=~/cuda-shim cargo build -r
   ```
 
+## Atalho: um comando do texto à rede
+
+```bash
+MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_train.sh   <prefixo> <id> <épocas> [wdl] [lr]
+```
+
+O script:
+- fotografa as linhas completas de `datagen/<prefixo>-*.txt` (o datagen pode estar escrevendo);
+- converte, embaralha e junta os arquivos;
+- treina com uma época por superbatch;
+- grava a rede em `nets/<id>.nnue`.
+
+Os passos 3 e 4 abaixo são o que ele faz.
+
+Medido em 27/09/2026: 2,5 milhões de posições, 10 épocas em 7 s (~4,7 milhões de posições/s na
+GTX 1660).
+
 ## 3. Converter, embaralhar e juntar
 
 ```bash
