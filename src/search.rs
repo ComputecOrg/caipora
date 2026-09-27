@@ -109,7 +109,7 @@ struct PieceTo {
 
 impl PieceTo {
     fn index(self) -> usize {
-        (self.piece.color.index() * 6 + self.piece.kind.index()) * 64 + self.to.index()
+        piece_index(self.piece) * 64 + self.to.index()
     }
 }
 
@@ -148,15 +148,50 @@ impl ContinuationHistory {
     }
 }
 
-/// O que ordena os lances quietos de um nó: o histórico simples e as continuações dos dois
-/// lances anteriores (o do adversário e o nosso).
-struct QuietOrdering<'a> {
+/// Histórico de capturas: quanto cada captura (peça, destino, tipo capturado) causou corte.
+/// Desempata capturas da mesma vítima melhor que "atacante mais barato".
+struct CaptureHistory {
+    table: Vec<[[i32; 6]; 64]>,
+}
+
+impl CaptureHistory {
+    fn new() -> Box<CaptureHistory> {
+        Box::new(CaptureHistory {
+            table: vec![[[0; 6]; 64]; 12],
+        })
+    }
+
+    fn get(&self, piece: Piece, to: Square, victim: PieceType) -> i32 {
+        self.table[piece_index(piece)][to.index()][victim.index()]
+    }
+
+    fn update(&mut self, piece: Piece, to: Square, victim: PieceType, bonus: i32) {
+        apply_bonus(
+            &mut self.table[piece_index(piece)][to.index()][victim.index()],
+            bonus,
+        );
+    }
+
+    fn clear(&mut self) {
+        self.table.fill([[0; 6]; 64]);
+    }
+}
+
+fn piece_index(piece: Piece) -> usize {
+    piece.color.index() * 6 + piece.kind.index()
+}
+
+/// O que ordena os lances de um nó além da TT e dos killers: para quietos, o histórico simples e
+/// as continuações dos dois lances anteriores (o do adversário e o nosso); para capturas, o
+/// histórico de capturas.
+struct MoveOrdering<'a> {
     history: &'a History,
     continuation: &'a ContinuationHistory,
+    captures: &'a CaptureHistory,
     previous: [Option<PieceTo>; 2],
 }
 
-impl QuietOrdering<'_> {
+impl MoveOrdering<'_> {
     fn score(&self, pos: &Position, mv: Move) -> i32 {
         let mut score = self.history.get(pos.side_to_move(), mv);
         if let Some(piece) = pos.piece_at(mv.from()) {
@@ -246,6 +281,7 @@ pub struct Searcher {
     tt: TranspositionTable,
     history: Box<History>,
     continuation: Box<ContinuationHistory>,
+    captures: Box<CaptureHistory>,
     correction: Box<CorrectionHistory>,
 }
 
@@ -255,6 +291,7 @@ impl Searcher {
             tt: TranspositionTable::new(hash_megabytes),
             history: History::new(),
             continuation: ContinuationHistory::new(),
+            captures: CaptureHistory::new(),
             correction: CorrectionHistory::new(),
         }
     }
@@ -267,6 +304,7 @@ impl Searcher {
         self.tt.clear();
         self.history.clear();
         self.continuation.clear();
+        self.captures.clear();
         self.correction.clear();
     }
 
@@ -354,6 +392,7 @@ impl Searcher {
             tt: &mut self.tt,
             history: &mut self.history,
             continuation: &mut self.continuation,
+            captures: &mut self.captures,
             correction: &mut self.correction,
             killers: vec![[None, None]; MAX_PLY + 2],
             evals: vec![-INFINITY; MAX_PLY + 2],
@@ -379,6 +418,7 @@ struct SearchState<'a> {
     tt: &'a mut TranspositionTable,
     history: &'a mut History,
     continuation: &'a mut ContinuationHistory,
+    captures: &'a mut CaptureHistory,
     correction: &'a mut CorrectionHistory,
     /// Até dois lances quietos que causaram corte em cada nível.
     killers: Vec<[Option<Move>; 2]>,
@@ -566,9 +606,10 @@ impl SearchState<'_> {
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
         let killers = self.killers[ply];
-        let ordering = QuietOrdering {
+        let ordering = MoveOrdering {
             history: self.history,
             continuation: self.continuation,
+            captures: self.captures,
             previous: self.previous_moves(ply),
         };
         score_moves(pos, &moves, tt_move, killers, &ordering, &mut scores);
@@ -578,6 +619,7 @@ impl SearchState<'_> {
         let mut best_move = None;
         let mut legal: usize = 0;
         let mut quiets_tried = MoveList::new();
+        let mut captures_tried = MoveList::new();
         for index in 0..moves.len() {
             let mv = pick_next(&mut moves, &mut scores, index);
             let next = pos.make_move(mv);
@@ -665,12 +707,15 @@ impl SearchState<'_> {
                         if quiet {
                             self.reward_quiet(pos, mv, &quiets_tried, depth, ply);
                         }
+                        self.reward_captures(pos, mv, &captures_tried, depth);
                         break;
                     }
                 }
             }
             if quiet {
                 quiets_tried.push(mv);
+            } else if captured_kind(pos, mv).is_some() {
+                captures_tried.push(mv);
             }
         }
         if legal == 0 {
@@ -738,9 +783,10 @@ impl SearchState<'_> {
         let mut moves = MoveList::new();
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
-        let ordering = QuietOrdering {
+        let ordering = MoveOrdering {
             history: self.history,
             continuation: self.continuation,
+            captures: self.captures,
             previous: [None, None],
         };
         score_moves(pos, &moves, tt_move, [None, None], &ordering, &mut scores);
@@ -811,6 +857,21 @@ impl SearchState<'_> {
         if slots[0] != Some(mv) {
             slots[1] = slots[0];
             slots[0] = Some(mv);
+        }
+    }
+
+    /// Corte em `best`: as capturas tentadas antes dele não serviram (punição) e, se ele mesmo é
+    /// uma captura, ganha o bônus.
+    fn reward_captures(&mut self, pos: &Position, best: Move, tried: &MoveList, depth: i32) {
+        let bonus = (16 * depth * depth).min(1_600);
+        let mut update = |mv: Move, bonus: i32| {
+            if let (Some(piece), Some(victim)) = (pos.piece_at(mv.from()), captured_kind(pos, mv)) {
+                self.captures.update(piece, mv.to(), victim, bonus);
+            }
+        };
+        update(best, bonus);
+        for other in tried {
+            update(other, -bonus);
         }
     }
 
@@ -919,21 +980,26 @@ fn score_moves(
     moves: &MoveList,
     tt_move: Option<Move>,
     killers: [Option<Move>; 2],
-    ordering: &QuietOrdering,
+    ordering: &MoveOrdering,
     scores: &mut [i32],
 ) {
     for (score, mv) in scores.iter_mut().zip(moves.iter()) {
         *score = if Some(mv) == tt_move {
             1_000_000
         } else if let Some(victim) = captured_kind(pos, mv) {
-            let attacker = pos
-                .piece_at(mv.from())
-                .map_or(0, |p| ORDER_VALUE[p.kind.index()]);
-            let mvv_lva = 10 * ORDER_VALUE[victim.index()] - attacker;
+            // Vítima em faixas de 1000; dentro da faixa, o histórico (até ±512) e, no empate, o
+            // atacante mais barato.
+            let (attacker, history) = pos.piece_at(mv.from()).map_or((0, 0), |p| {
+                (
+                    ORDER_VALUE[p.kind.index()],
+                    ordering.captures.get(p, mv.to(), victim),
+                )
+            });
+            let value = 1_000 * ORDER_VALUE[victim.index()] + history / 32 - attacker;
             if see(pos, mv) >= 0 {
-                100_000 + mvv_lva
+                100_000 + value
             } else {
-                -100_000 + mvv_lva
+                -100_000 + value
             }
         } else if mv.kind() == MoveKind::Promotion(PieceType::Queen) {
             90_000
@@ -1249,9 +1315,11 @@ mod tests {
         history.update(Color::White, quiet("c4", "b5"), 900);
         let killer = quiet("f3", "g5");
         let continuation = ContinuationHistory::new();
-        let ordering = QuietOrdering {
+        let captures = CaptureHistory::new();
+        let ordering = MoveOrdering {
             history: &history,
             continuation: &continuation,
+            captures: &captures,
             previous: [None, None],
         };
         let mut scores = [0i32; MAX_MOVES];
@@ -1312,10 +1380,12 @@ mod tests {
         let after_e4 = piece_to("P", "e4");
         let knight = piece_to("n", "c6");
         continuation.update(after_e4, knight.piece, knight.to, 2_000);
+        let captures = CaptureHistory::new();
         let order = |previous: [Option<PieceTo>; 2]| {
-            let ordering = QuietOrdering {
+            let ordering = MoveOrdering {
                 history: &history,
                 continuation: &continuation,
+                captures: &captures,
                 previous,
             };
             let mut scores = [0i32; MAX_MOVES];
@@ -1356,6 +1426,58 @@ mod tests {
             .start(&pos, &[], &limits, &stop)
             .quiescence(&pos, -INFINITY, INFINITY, 0);
         assert_eq!(score, 777);
+    }
+
+    #[test]
+    fn capture_history_is_keyed_by_piece_destination_and_victim() {
+        let mut captures = CaptureHistory::new();
+        let rook = Piece::new(Color::White, PieceType::Rook);
+        let knight = Piece::new(Color::White, PieceType::Knight);
+        let d4: Square = "d4".parse().unwrap();
+        captures.update(rook, d4, PieceType::Pawn, 1_000);
+        assert!(captures.get(rook, d4, PieceType::Pawn) > 0);
+        assert_eq!(captures.get(knight, d4, PieceType::Pawn), 0);
+        assert_eq!(captures.get(rook, d4, PieceType::Knight), 0);
+        assert_eq!(
+            captures.get(rook, "e4".parse().unwrap(), PieceType::Pawn),
+            0
+        );
+    }
+
+    #[test]
+    fn captures_are_ordered_by_victim_then_capture_history() {
+        // Nxh4 leva um cavalo; Nxd4 e Rxd4 levam o mesmo peão solto.
+        let pos = Position::from_fen("4k3/8/8/8/3p3n/5N2/8/3RK3 w - - 0 1").unwrap();
+        let mut moves = MoveList::new();
+        generate_pseudo_legal(&pos, &mut moves);
+        let history = History::new();
+        let continuation = ContinuationHistory::new();
+        let order = |captures: &CaptureHistory| {
+            let ordering = MoveOrdering {
+                history: &history,
+                continuation: &continuation,
+                captures,
+                previous: [None, None],
+            };
+            let mut scores = [0i32; MAX_MOVES];
+            score_moves(&pos, &moves, None, [None, None], &ordering, &mut scores);
+            let score_of = |uci: &str| {
+                let i = moves.iter().position(|m| m.to_uci(false) == uci).unwrap();
+                scores[i]
+            };
+            (score_of("f3h4"), score_of("f3d4"), score_of("d1d4"))
+        };
+        // Sem histórico: vítima maior primeiro; com a mesma vítima, o atacante mais barato.
+        let (nxn, nxp, rxp) = order(&CaptureHistory::new());
+        assert!(nxn > nxp && nxp > rxp, "{nxn} {nxp} {rxp}");
+        // Com histórico a favor de Rxd4, ela passa Nxd4, mas não a captura do cavalo.
+        let mut captures = CaptureHistory::new();
+        let rook = Piece::new(Color::White, PieceType::Rook);
+        for _ in 0..50 {
+            captures.update(rook, "d4".parse().unwrap(), PieceType::Pawn, 1_600);
+        }
+        let (nxn, nxp, rxp) = order(&captures);
+        assert!(nxn > rxp && rxp > nxp, "{nxn} {nxp} {rxp}");
     }
 
     #[test]
