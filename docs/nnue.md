@@ -77,6 +77,18 @@ caipora-trainer g1.bin caipora-g1 <superbatches> [lotes por superbatch] [wdl] [l
 - A taxa de aprendizado cai em cosseno até 1% da inicial.
 - A rede sai em `checkpoints/<id>-<superbatch>/quantised.bin`.
 
+## Rede embutida
+
+`net/caipora-g1.nnue` vai dentro do executável (D14) e é a avaliação padrão. Pela opção `EvalFile`:
+
+| Valor | Avaliação |
+|---|---|
+| `<embedded>` (padrão) | a rede do executável |
+| `none` | a avaliação à mão |
+| um caminho | outra rede, para testar |
+
+Trocar a rede embutida muda o bench: o commit precisa do novo `Bench:`.
+
 ## 5. Testar na engine
 
 ```

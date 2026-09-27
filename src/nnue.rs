@@ -12,6 +12,8 @@
 //!
 //! O arquivo é completado com zeros até um múltiplo de 64 bytes.
 
+use std::sync::{Arc, LazyLock};
+
 use crate::moves::{Move, MoveKind};
 use crate::position::{CastleSide, Position, castle_destinations};
 use crate::types::{Color, Piece, Square};
@@ -28,6 +30,17 @@ const SCALE: i32 = 400;
 const NETWORK_VALUES: usize = 768 * HIDDEN + HIDDEN + 2 * HIDDEN + 1;
 /// Tamanho do arquivo: os valores, completados até múltiplo de 64 bytes.
 pub const NETWORK_BYTES: usize = (2 * NETWORK_VALUES).div_ceil(64) * 64;
+
+/// Rede que vai dentro do executável (D14): treinada só com partidas do próprio Caipora (D2).
+static EMBEDDED: LazyLock<Arc<Network>> = LazyLock::new(|| {
+    let bytes = include_bytes!("../net/caipora-g1.nnue");
+    Arc::new(Network::from_bytes(bytes).expect("a rede embutida tem o formato certo"))
+});
+
+/// A rede embutida no executável.
+pub fn embedded() -> Arc<Network> {
+    Arc::clone(&EMBEDDED)
+}
 
 /// Uma coluna da camada oculta: um valor por neurônio.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +292,20 @@ mod tests {
 
     fn sq(name: &str) -> Square {
         name.parse().unwrap()
+    }
+
+    #[test]
+    fn the_embedded_network_is_a_trained_one() {
+        let net = embedded();
+        // Posição inicial perto de zero; uma dama a mais, vantagem enorme para quem tem a dama.
+        let start = net.evaluate(&Position::startpos());
+        assert!(start.abs() < 100, "{start}");
+        let queen_up =
+            Position::from_fen("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1").unwrap();
+        assert!(net.evaluate(&queen_up) > 500);
+        let queen_down =
+            Position::from_fen("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1").unwrap();
+        assert!(net.evaluate(&queen_down) < -500);
     }
 
     #[test]
