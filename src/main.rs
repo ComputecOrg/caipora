@@ -6,6 +6,7 @@ use caipora::nnue::Network;
 use caipora::{bench, datagen, uci};
 
 fn main() {
+    caipora::crash::install_hook();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // `caipora bench [profundidade]`: usado pelo OpenBench e pelo CI para a assinatura da busca.
