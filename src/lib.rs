@@ -1,6 +1,7 @@
 pub mod attacks;
 pub mod bench;
 pub mod bitboard;
+pub mod crash;
 pub mod datagen;
 pub mod eval;
 pub mod movegen;

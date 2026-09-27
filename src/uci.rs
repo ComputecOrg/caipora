@@ -72,6 +72,7 @@ impl Engine {
 
     /// Trata uma linha de comando. Devolve `false` quando é para encerrar.
     pub fn handle(&mut self, line: &str) -> bool {
+        crate::crash::record_command(line);
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let Some((&command, args)) = tokens.split_first() else {
             return true;
