@@ -8,6 +8,8 @@
 # - <prefixo>: usa datagen/<prefixo>-*.txt.
 # - Cada superbatch do treino é uma época (uma passada pelos dados).
 # - A rede final vai para nets/<id>.nnue; os checkpoints ficam em ~/nnue/<id>/checkpoints.
+# - As últimas 1% das linhas de cada arquivo (as partidas mais recentes) ficam fora do treino, em
+#   nets/<id>-validation.txt, para `caipora validate` medir a perda em posições não vistas.
 set -eu
 PREFIX=$1; ID=$2; EPOCHS=$3; WDL=${4:-0.5}; LR=${5:-0.001}
 REPO=/mnt/c/Projetos/ChessAI
@@ -21,15 +23,19 @@ rm -rf "$HOME/caipora-trainer" && cp -r "$REPO/trainer" "$HOME/caipora-trainer"
 
 WORK=$HOME/nnue/$ID
 mkdir -p "$WORK" && cd "$WORK"
-rm -f part-*.bin part-*.txt
+rm -f part-*.bin part-*.txt validation.txt
 for f in "$REPO"/datagen/"$PREFIX"-*.txt; do
   name=$(basename "$f" .txt)
   lines=$(wc -l < "$f")
-  head -n "$lines" "$f" > "part-$name.txt"
+  held=$(( lines / 100 ))
+  head -n "$lines" "$f" > snapshot.txt
+  head -n $(( lines - held )) snapshot.txt > "part-$name.txt"
+  tail -n "$held" snapshot.txt >> validation.txt
+  rm snapshot.txt
   "$UTILS" convert --from text --input "part-$name.txt" --output "part-$name.bin" > /dev/null
   "$UTILS" shuffle --input "part-$name.bin" --output "part-$name-shuf.bin" --mem-used-mb 2048 > /dev/null
   rm "part-$name.txt" "part-$name.bin"
-  echo "$name: $lines posições"
+  echo "$name: $(( lines - held )) posições de treino, $held de validação"
 done
 "$UTILS" interleave part-*-shuf.bin --output data.bin > /dev/null
 rm part-*-shuf.bin
@@ -41,4 +47,6 @@ echo "total: $POSITIONS posições, $BATCHES lotes por época, $EPOCHS épocas, 
   2>&1 | sed -u 's/\x1b\[[0-9;]*m//g' | grep --line-buffered -E "running loss|Saved|Total Training"
 mkdir -p "$REPO/nets"
 cp "checkpoints/$ID-$EPOCHS/quantised.bin" "$REPO/nets/$ID.nnue"
-ls -la "$REPO/nets/$ID.nnue"
+cp validation.txt "$REPO/nets/$ID-validation.txt"
+ls -la "$REPO/nets/$ID.nnue" "$REPO/nets/$ID-validation.txt"
+echo "perda de validação: caipora validate nets/$ID.nnue nets/$ID-validation.txt $WDL"

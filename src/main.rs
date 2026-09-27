@@ -2,6 +2,7 @@ use std::fs::OpenOptions;
 use std::io::{self, BufWriter};
 use std::time::Instant;
 
+use caipora::nnue::Network;
 use caipora::{bench, datagen, uci};
 
 fn main() {
@@ -19,6 +20,13 @@ fn main() {
             if let Err(message) = run_datagen(&args[1..]) {
                 eprintln!("datagen: {message}");
                 eprintln!("uso: caipora datagen <partidas> <arquivo> [semente] [nós por lance]");
+                std::process::exit(1);
+            }
+        }
+        Some("validate") => {
+            if let Err(message) = run_validate(&args[1..]) {
+                eprintln!("validate: {message}");
+                eprintln!("uso: caipora validate <rede|-> <posições.txt> [wdl]");
                 std::process::exit(1);
             }
         }
@@ -66,5 +74,28 @@ fn run_datagen(args: &[String]) -> Result<(), String> {
         "fim: {} partidas, {} posições",
         progress.games, progress.positions
     );
+    Ok(())
+}
+
+/// `caipora validate <rede|-> <posições.txt> [wdl]`: perda da rede (ou, com `-`, da avaliação à
+/// mão) em posições no formato do datagen, a mesma do treino (wdl padrão 0,5).
+fn run_validate(args: &[String]) -> Result<(), String> {
+    let net_path = args.first().ok_or("falta a rede")?;
+    let data_path = args.get(1).ok_or("falta o arquivo de posições")?;
+    let wdl: f64 = match args.get(2) {
+        Some(text) => text.parse().map_err(|_| format!("{text} não é número"))?,
+        None => 0.5,
+    };
+    let text = std::fs::read_to_string(data_path).map_err(|e| format!("{data_path}: {e}"))?;
+    // "-" no lugar da rede: a avaliação feita à mão, como linha de base.
+    let result = if net_path == "-" {
+        datagen::validation_loss(&caipora::eval::evaluate, &text, wdl)
+    } else {
+        let bytes = std::fs::read(net_path).map_err(|e| format!("{net_path}: {e}"))?;
+        let net = Network::from_bytes(&bytes).map_err(|e| format!("{net_path}: {e}"))?;
+        datagen::validation_loss(&|pos| net.evaluate(pos), &text, wdl)
+    };
+    let (loss, count) = result.ok_or("nenhuma posição válida")?;
+    println!("validation loss {loss:.6} over {count} positions (wdl {wdl})");
     Ok(())
 }
