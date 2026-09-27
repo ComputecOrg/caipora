@@ -1,6 +1,7 @@
 //! Busca da v1: negamax alpha-beta fail-soft com aprofundamento iterativo, janelas de aspiração,
 //! PVS, extensão de xeque, busca quiescente, tabela de transposição e ordenação TT → MVV-LVA.
 
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -10,7 +11,7 @@ use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
 use crate::position::Position;
 use crate::timeman::Limits;
 use crate::tt::{Bound, TranspositionTable};
-use crate::types::PieceType;
+use crate::types::{Color, PieceType};
 
 pub const MAX_PLY: usize = 128;
 pub const INFINITY: i32 = 32_000;
@@ -21,6 +22,7 @@ pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 const RFP_MAX_DEPTH: i32 = 8;
 const RFP_MARGIN: i32 = 80;
 const NMP_MIN_DEPTH: i32 = 3;
+const LMR_MIN_DEPTH: i32 = 3;
 
 /// Informação de uma iteração completa, para a linha `info` do UCI.
 #[derive(Clone, Debug)]
@@ -43,14 +45,64 @@ pub struct SearchResult {
     pub pv: Vec<Move>,
 }
 
+/// Teto do histórico; a "gravidade" puxa os valores de volta para zero perto dele.
+const HISTORY_MAX: i32 = 16_384;
+
+/// Histórico de lances quietos ("butterfly"): quanto cada lance (cor, origem, destino) causou
+/// cortes. Guia a ordenação e as reduções.
+struct History {
+    table: [[[i32; 64]; 64]; 2],
+}
+
+impl History {
+    fn new() -> Box<History> {
+        Box::new(History {
+            table: [[[0; 64]; 64]; 2],
+        })
+    }
+
+    fn get(&self, color: Color, mv: Move) -> i32 {
+        self.table[color.index()][mv.from().index()][mv.to().index()]
+    }
+
+    /// Soma `bonus` (negativo para punir) com gravidade: nunca passa de `HISTORY_MAX`.
+    fn update(&mut self, color: Color, mv: Move, bonus: i32) {
+        let entry = &mut self.table[color.index()][mv.from().index()][mv.to().index()];
+        let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
+        *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
+    }
+
+    fn clear(&mut self) {
+        self.table = [[[0; 64]; 64]; 2];
+    }
+}
+
+/// Redução base do LMR para a profundidade e o número do lance (1 = primeiro lance legal).
+fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
+    LMR_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
+}
+
+/// `0.75 + ln(profundidade)·ln(número do lance)/2.25`, arredondado para baixo.
+static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
+    let mut table = [[0; 64]; 64];
+    for (depth, row) in table.iter_mut().enumerate().skip(1) {
+        for (number, cell) in row.iter_mut().enumerate().skip(1) {
+            *cell = (0.75 + (depth as f64).ln() * (number as f64).ln() / 2.25) as i32;
+        }
+    }
+    table
+});
+
 pub struct Searcher {
     tt: TranspositionTable,
+    history: Box<History>,
 }
 
 impl Searcher {
     pub fn new(hash_megabytes: usize) -> Searcher {
         Searcher {
             tt: TranspositionTable::new(hash_megabytes),
+            history: History::new(),
         }
     }
 
@@ -60,6 +112,7 @@ impl Searcher {
 
     pub fn clear(&mut self) {
         self.tt.clear();
+        self.history.clear();
     }
 
     /// Busca a partir de `root`. `history` traz os hashes das posições anteriores da partida (sem
@@ -89,6 +142,8 @@ impl Searcher {
         hashes.push(root.hash());
         let mut state = SearchState {
             tt: &mut self.tt,
+            history: &mut self.history,
+            killers: vec![[None, None]; MAX_PLY + 2],
             stop,
             limits,
             start: Instant::now(),
@@ -151,6 +206,9 @@ impl Searcher {
 /// Estado de uma busca em andamento.
 struct SearchState<'a> {
     tt: &'a mut TranspositionTable,
+    history: &'a mut History,
+    /// Até dois lances quietos que causaram corte em cada nível.
+    killers: Vec<[Option<Move>; 2]>,
     stop: &'a AtomicBool,
     limits: &'a Limits,
     start: Instant,
@@ -254,6 +312,7 @@ impl SearchState<'_> {
         }
         self.nodes += 1;
         self.seldepth = self.seldepth.max(ply);
+        self.killers[ply + 1] = [None, None];
 
         let entry = self.tt.probe(pos.hash());
         let tt_move = entry.and_then(|e| e.mv);
@@ -313,12 +372,14 @@ impl SearchState<'_> {
         let mut moves = MoveList::new();
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
-        score_moves(pos, &moves, tt_move, &mut scores);
+        let killers = self.killers[ply];
+        score_moves(pos, &moves, tt_move, killers, self.history, &mut scores);
 
         let original_alpha = alpha;
         let mut best_score = -INFINITY;
         let mut best_move = None;
-        let mut legal = 0;
+        let mut legal: usize = 0;
+        let mut quiets_tried = MoveList::new();
         for index in 0..moves.len() {
             let mv = pick_next(&mut moves, &mut scores, index);
             let next = pos.make_move(mv);
@@ -326,13 +387,40 @@ impl SearchState<'_> {
                 continue;
             }
             legal += 1;
+            let quiet = !is_tactical(pos, mv);
+            let new_depth = depth - 1;
             self.hashes.push(next.hash());
             let score = if legal == 1 {
-                -self.negamax(&next, depth - 1, -beta, -alpha, ply + 1, pv_node)
+                -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
             } else {
-                let mut score = -self.negamax(&next, depth - 1, -alpha - 1, -alpha, ply + 1, false);
+                // Lances tardios e quietos: primeiro uma busca reduzida; se surpreender, refaz.
+                let late = legal > if pv_node { 3 } else { 2 };
+                let reduction =
+                    if depth >= LMR_MIN_DEPTH && late && quiet && !in_check && !next.in_check() {
+                        let mut r = lmr_reduction(depth, legal);
+                        if pv_node {
+                            r -= 1;
+                        }
+                        if killers.contains(&Some(mv)) {
+                            r -= 1;
+                        }
+                        r.clamp(0, new_depth - 1)
+                    } else {
+                        0
+                    };
+                let mut score = -self.negamax(
+                    &next,
+                    new_depth - reduction,
+                    -alpha - 1,
+                    -alpha,
+                    ply + 1,
+                    false,
+                );
+                if reduction > 0 && score > alpha {
+                    score = -self.negamax(&next, new_depth, -alpha - 1, -alpha, ply + 1, false);
+                }
                 if pv_node && score > alpha && score < beta {
-                    score = -self.negamax(&next, depth - 1, -beta, -alpha, ply + 1, true);
+                    score = -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, true);
                 }
                 score
             };
@@ -347,9 +435,15 @@ impl SearchState<'_> {
                     best_move = Some(mv);
                     self.update_pv(ply, mv);
                     if score >= beta {
+                        if quiet {
+                            self.reward_quiet(us, mv, &quiets_tried, depth, ply);
+                        }
                         break;
                     }
                 }
+            }
+            if quiet {
+                quiets_tried.push(mv);
             }
         }
         if legal == 0 {
@@ -397,7 +491,7 @@ impl SearchState<'_> {
         let mut moves = MoveList::new();
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
-        score_moves(pos, &moves, None, &mut scores);
+        score_moves(pos, &moves, None, [None, None], self.history, &mut scores);
         let us = pos.side_to_move();
         let mut legal = 0;
         for index in 0..moves.len() {
@@ -428,6 +522,21 @@ impl SearchState<'_> {
             return -MATE + ply as i32;
         }
         best_score
+    }
+
+    /// Lance quieto que causou corte: bônus no histórico, punição para os quietos que falharam
+    /// antes dele, e vira killer deste nível.
+    fn reward_quiet(&mut self, color: Color, mv: Move, tried: &MoveList, depth: i32, ply: usize) {
+        let bonus = (16 * depth * depth).min(1_600);
+        self.history.update(color, mv, bonus);
+        for other in tried {
+            self.history.update(color, other, -bonus);
+        }
+        let slots = &mut self.killers[ply];
+        if slots[0] != Some(mv) {
+            slots[1] = slots[0];
+            slots[0] = Some(mv);
+        }
     }
 
     fn update_pv(&mut self, ply: usize, mv: Move) {
@@ -507,7 +616,15 @@ fn is_tactical(pos: &Position, mv: Move) -> bool {
 
 /// Ordem: lance da TT, capturas por MVV-LVA (vítima mais valiosa, atacante mais barato),
 /// promoções a dama, demais lances.
-fn score_moves(pos: &Position, moves: &MoveList, tt_move: Option<Move>, scores: &mut [i32]) {
+fn score_moves(
+    pos: &Position,
+    moves: &MoveList,
+    tt_move: Option<Move>,
+    killers: [Option<Move>; 2],
+    history: &History,
+    scores: &mut [i32],
+) {
+    let us = pos.side_to_move();
     for (score, mv) in scores.iter_mut().zip(moves.iter()) {
         *score = if Some(mv) == tt_move {
             1_000_000
@@ -518,8 +635,12 @@ fn score_moves(pos: &Position, moves: &MoveList, tt_move: Option<Move>, scores: 
             100_000 + 10 * ORDER_VALUE[victim.index()] - attacker
         } else if mv.kind() == MoveKind::Promotion(PieceType::Queen) {
             90_000
+        } else if Some(mv) == killers[0] {
+            80_000
+        } else if Some(mv) == killers[1] {
+            79_000
         } else {
-            0
+            history.get(us, mv)
         };
     }
 }
@@ -726,6 +847,72 @@ mod tests {
         }
         // Mate em 5 meios-lances visto a 3 da raiz fica guardado como mate em 2 a partir do nó.
         assert_eq!(score_to_tt(MATE - 5, 3), MATE - 2);
+    }
+
+    fn quiet(from: &str, to: &str) -> Move {
+        Move::new(from.parse().unwrap(), to.parse().unwrap(), MoveKind::Normal)
+    }
+
+    #[test]
+    fn history_gravity_keeps_values_bounded() {
+        let mut history = History::new();
+        let mv = quiet("g1", "f3");
+        for _ in 0..1_000 {
+            history.update(Color::White, mv, 1_600);
+        }
+        let high = history.get(Color::White, mv);
+        assert!((10_001..=HISTORY_MAX).contains(&high), "{high}");
+        for _ in 0..1_000 {
+            history.update(Color::White, mv, -1_600);
+        }
+        let low = history.get(Color::White, mv);
+        assert!((-HISTORY_MAX..-10_000).contains(&low), "{low}");
+        assert_eq!(history.get(Color::Black, mv), 0);
+    }
+
+    #[test]
+    fn lmr_reduction_grows_with_depth_and_move_number() {
+        assert_eq!(lmr_reduction(1, 1), 0);
+        assert!(lmr_reduction(3, 4) >= 1);
+        for depth in 1..40 {
+            for number in 1..60 {
+                assert!(lmr_reduction(depth + 1, number) >= lmr_reduction(depth, number));
+                assert!(lmr_reduction(depth, number + 1) >= lmr_reduction(depth, number));
+            }
+        }
+        assert!(lmr_reduction(20, 40) >= 4);
+    }
+
+    #[test]
+    fn move_ordering_puts_killers_between_captures_and_quiets() {
+        // Brancas: Nxe5 (captura), Nf3-g5 (killer), Bc4-b5 (com histórico), a2-a3 (nada).
+        let pos =
+            Position::from_fen("r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1")
+                .unwrap();
+        let mut moves = MoveList::new();
+        generate_pseudo_legal(&pos, &mut moves);
+        let mut history = History::new();
+        history.update(Color::White, quiet("c4", "b5"), 900);
+        let killer = quiet("f3", "g5");
+        let mut scores = [0i32; MAX_MOVES];
+        score_moves(
+            &pos,
+            &moves,
+            None,
+            [Some(killer), None],
+            &history,
+            &mut scores,
+        );
+        let score_of = |uci: &str| {
+            let i = moves
+                .iter()
+                .position(|m| m.to_uci(false) == uci)
+                .unwrap_or_else(|| panic!("{uci} não gerado"));
+            scores[i]
+        };
+        assert!(score_of("f3e5") > score_of("f3g5"));
+        assert!(score_of("f3g5") > score_of("c4b5"));
+        assert!(score_of("c4b5") > score_of("a2a3"));
     }
 
     #[test]
