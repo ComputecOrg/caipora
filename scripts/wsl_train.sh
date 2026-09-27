@@ -41,8 +41,13 @@ for f in "$REPO"/datagen/"$PREFIX"-*.txt "$REPO"/datagen/"$PREFIX"-*.txt.gz; do
   rm "part-$name.txt" "part-$name.bin"
   echo "$name: $(( lines - held )) posições de treino, $held de validação"
 done
-"$UTILS" interleave part-*-shuf.bin --output data.bin > /dev/null
-rm part-*-shuf.bin
+shuffled=(part-*-shuf.bin)
+if [ "${#shuffled[@]}" -eq 1 ]; then
+  mv "${shuffled[0]}" data.bin   # o interleave exige pelo menos 2 arquivos
+else
+  "$UTILS" interleave "${shuffled[@]}" --output data.bin > /dev/null
+  rm "${shuffled[@]}"
+fi
 POSITIONS=$(( $(stat -c %s data.bin) / 32 ))
 BATCHES=$(( POSITIONS / 16384 ))
 echo "total: $POSITIONS posições, $BATCHES lotes por época, $EPOCHS épocas, wdl $WDL, lr $LR"
