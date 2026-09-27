@@ -92,6 +92,64 @@ impl History {
     }
 }
 
+/// Entradas por cor da tabela de correção (potência de 2).
+const CORRECTION_SIZE: usize = 16_384;
+/// As entradas guardam centipeões multiplicados por isto, para a média móvel não perder precisão.
+const CORRECTION_GRAIN: i32 = 256;
+/// Maior correção aplicada, em centipeões.
+const CORRECTION_MAX: i32 = 100;
+
+/// Correção da avaliação estática pela estrutura de peões: média móvel da diferença entre o que a
+/// busca achou e o que a avaliação dizia, em posições com os mesmos peões. Conserta, aos poucos,
+/// o que a avaliação erra de forma sistemática naquele tipo de posição.
+struct CorrectionHistory {
+    table: [[i32; CORRECTION_SIZE]; 2],
+}
+
+impl CorrectionHistory {
+    fn new() -> Box<CorrectionHistory> {
+        Box::new(CorrectionHistory {
+            table: [[0; CORRECTION_SIZE]; 2],
+        })
+    }
+
+    fn index(pawn_hash: u64) -> usize {
+        pawn_hash as usize & (CORRECTION_SIZE - 1)
+    }
+
+    /// Correção, em centipeões, para o lado `color` a jogar.
+    fn get(&self, color: Color, pawn_hash: u64) -> i32 {
+        self.table[color.index()][Self::index(pawn_hash)] / CORRECTION_GRAIN
+    }
+
+    /// Puxa a entrada na direção de `error` (busca menos avaliação crua); buscas mais fundas
+    /// pesam mais.
+    fn update(&mut self, color: Color, pawn_hash: u64, error: i32, depth: i32) {
+        let weight = (depth + 1).clamp(1, 16);
+        let limit = CORRECTION_MAX * CORRECTION_GRAIN;
+        let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
+        let entry = &mut self.table[color.index()][Self::index(pawn_hash)];
+        *entry += (target - *entry) * weight / 256;
+    }
+
+    fn clear(&mut self) {
+        self.table = [[0; CORRECTION_SIZE]; 2];
+    }
+}
+
+/// O resultado da busca num nó diz para que lado a avaliação estática errou? Exato sempre diz;
+/// falha alta só quando passou da avaliação, falha baixa só quando ficou abaixo. Mate não conta.
+fn correction_applies(bound: Bound, best_score: i32, static_eval: i32) -> bool {
+    if best_score.abs() >= MATE_BOUND {
+        return false;
+    }
+    match bound {
+        Bound::Exact => true,
+        Bound::Lower => best_score > static_eval,
+        Bound::Upper => best_score < static_eval,
+    }
+}
+
 /// Redução base do LMR para a profundidade e o número do lance (1 = primeiro lance legal).
 fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
     LMR_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
@@ -111,6 +169,7 @@ static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
 pub struct Searcher {
     tt: TranspositionTable,
     history: Box<History>,
+    correction: Box<CorrectionHistory>,
 }
 
 impl Searcher {
@@ -118,6 +177,7 @@ impl Searcher {
         Searcher {
             tt: TranspositionTable::new(hash_megabytes),
             history: History::new(),
+            correction: CorrectionHistory::new(),
         }
     }
 
@@ -128,6 +188,7 @@ impl Searcher {
     pub fn clear(&mut self) {
         self.tt.clear();
         self.history.clear();
+        self.correction.clear();
     }
 
     /// Busca a partir de `root`. `history` traz os hashes das posições anteriores da partida (sem
@@ -158,6 +219,7 @@ impl Searcher {
         let mut state = SearchState {
             tt: &mut self.tt,
             history: &mut self.history,
+            correction: &mut self.correction,
             killers: vec![[None, None]; MAX_PLY + 2],
             evals: vec![-INFINITY; MAX_PLY + 2],
             stop,
@@ -223,6 +285,7 @@ impl Searcher {
 struct SearchState<'a> {
     tt: &'a mut TranspositionTable,
     history: &'a mut History,
+    correction: &'a mut CorrectionHistory,
     /// Até dois lances quietos que causaram corte em cada nível.
     killers: Vec<[Option<Move>; 2]>,
     /// Avaliação estática de cada nível do caminho atual (`-INFINITY` quando em xeque).
@@ -350,8 +413,13 @@ impl SearchState<'_> {
         }
 
         let us = pos.side_to_move();
-        // Avaliação estática; em xeque não existe (a posição não é "parada").
-        let static_eval = if in_check { -INFINITY } else { evaluate(pos) };
+        // Avaliação estática, já corrigida; em xeque não existe (a posição não é "parada").
+        let raw_eval = if in_check { -INFINITY } else { evaluate(pos) };
+        let static_eval = if in_check {
+            -INFINITY
+        } else {
+            self.corrected_eval(pos, raw_eval)
+        };
         self.evals[ply] = static_eval;
         // A posição melhorou em relação à nossa vez anterior? Se sim, podar é mais seguro.
         let improving = !in_check && ply >= 2 && static_eval > self.evals[ply - 2];
@@ -510,6 +578,11 @@ impl SearchState<'_> {
         } else {
             Bound::Upper
         };
+        let quiet_best = best_move.is_none_or(|mv| !is_tactical(pos, mv));
+        if !in_check && quiet_best && correction_applies(bound, best_score, static_eval) {
+            self.correction
+                .update(us, pos.pawn_hash(), best_score - raw_eval, depth);
+        }
         self.tt.store(
             pos.hash(),
             best_move,
@@ -535,7 +608,7 @@ impl SearchState<'_> {
         let mut best_score = if in_check {
             -INFINITY
         } else {
-            let stand_pat = evaluate(pos);
+            let stand_pat = self.corrected_eval(pos, evaluate(pos));
             if stand_pat >= beta {
                 return stand_pat;
             }
@@ -576,6 +649,12 @@ impl SearchState<'_> {
             return -MATE + ply as i32;
         }
         best_score
+    }
+
+    /// Avaliação `raw` somada à correção da estrutura de peões, longe das pontuações de mate.
+    fn corrected_eval(&self, pos: &Position, raw: i32) -> i32 {
+        let correction = self.correction.get(pos.side_to_move(), pos.pawn_hash());
+        (raw + correction).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
     /// Lance quieto que causou corte: bônus no histórico, punição para os quietos que falharam
@@ -927,6 +1006,57 @@ mod tests {
         let low = history.get(Color::White, mv);
         assert!((-HISTORY_MAX..-10_000).contains(&low), "{low}");
         assert_eq!(history.get(Color::Black, mv), 0);
+    }
+
+    #[test]
+    fn correction_follows_the_search_error_and_stays_bounded() {
+        let mut correction = CorrectionHistory::new();
+        let pawns = 0x1234_5678_9ABC_DEF0;
+        assert_eq!(correction.get(Color::White, pawns), 0);
+        correction.update(Color::White, pawns, 40, 8);
+        let once = correction.get(Color::White, pawns);
+        assert!((1..40).contains(&once), "{once}");
+        for _ in 0..300 {
+            correction.update(Color::White, pawns, 40, 8);
+        }
+        let settled = correction.get(Color::White, pawns);
+        assert!((38..=40).contains(&settled), "{settled}");
+        // Erro enorme: a correção encosta no teto, sem nunca passar dele.
+        for _ in 0..300 {
+            correction.update(Color::White, pawns, 5_000, 20);
+            assert!(correction.get(Color::White, pawns) <= CORRECTION_MAX);
+        }
+        assert!(correction.get(Color::White, pawns) >= CORRECTION_MAX - 1);
+        for _ in 0..300 {
+            correction.update(Color::White, pawns, -5_000, 20);
+            assert!(correction.get(Color::White, pawns) >= -CORRECTION_MAX);
+        }
+        assert!(correction.get(Color::White, pawns) <= -CORRECTION_MAX + 1);
+        // Outra cor e outra estrutura de peões não são afetadas.
+        assert_eq!(correction.get(Color::Black, pawns), 0);
+        assert_eq!(correction.get(Color::White, pawns ^ 1), 0);
+    }
+
+    #[test]
+    fn deeper_searches_move_the_correction_more() {
+        let mut shallow = CorrectionHistory::new();
+        let mut deep = CorrectionHistory::new();
+        shallow.update(Color::White, 7, 100, 1);
+        deep.update(Color::White, 7, 100, 10);
+        assert!(deep.get(Color::White, 7) > shallow.get(Color::White, 7));
+    }
+
+    #[test]
+    fn correction_only_learns_when_the_bound_proves_the_direction() {
+        assert!(correction_applies(Bound::Exact, 10, 50));
+        // Falha alta: o valor real é pelo menos `best_score`; só ensina se passou da avaliação.
+        assert!(correction_applies(Bound::Lower, 80, 50));
+        assert!(!correction_applies(Bound::Lower, 30, 50));
+        // Falha baixa: o valor real é no máximo `best_score`.
+        assert!(correction_applies(Bound::Upper, 30, 50));
+        assert!(!correction_applies(Bound::Upper, 80, 50));
+        // Mate não é erro de avaliação.
+        assert!(!correction_applies(Bound::Exact, MATE - 3, 0));
     }
 
     #[test]
