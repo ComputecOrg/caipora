@@ -72,6 +72,18 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** renomear o código é barato; a conta do Lichess não muda depois do
   upgrade para BOT.
 
+## D8 — 26/09/2026 — Avaliação da v1 com tabelas próprias (sem PeSTO)
+
+- **Decisão:** a avaliação da v1 usa material e tabelas de posição **geradas por fórmulas
+  próprias** (centralização, avanço de peão, abrigo do rei, sétima fileira da torre),
+  interpoladas por fase. Nada das tabelas PeSTO nem de outra engine. O próximo passo é ajustar os
+  pesos com Texel tuning sobre partidas do próprio Caipora e, depois, trocar pela NNUE (D2).
+- **Por quê:** o `AI_USAGE.md` promete que constantes e tabelas de outras engines nunca são
+  copiadas; as tabelas PeSTO, recomendadas na pesquisa, são constantes de outra engine (RofChade).
+  Fórmulas geradas no código deixam a origem clara.
+- **Custo se estiver errada:** a v1 fica mais fraca que com PeSTO (estimativa sem medição: algo
+  como 100 a 200 Elo). O ajuste com dados próprios recupera isso.
+
 ## D7 — 26/09/2026 — Repositório privado até a primeira submissão pública
 
 - **Decisão:** o repositório fica na conta **ComputecOrg** do dono no GitHub
