@@ -130,6 +130,22 @@ impl Square {
     pub fn all() -> impl Iterator<Item = Square> {
         (0..64).map(Square)
     }
+
+    /// Casa deslocada `df` colunas e `dr` fileiras; `None` se sair do tabuleiro.
+    pub const fn offset(self, df: i8, dr: i8) -> Option<Square> {
+        let file = self.file() as i8 + df;
+        let rank = self.rank() as i8 + dr;
+        if file >= 0 && file < 8 && rank >= 0 && rank < 8 {
+            Some(Square((rank * 8 + file) as u8))
+        } else {
+            None
+        }
+    }
+
+    /// Usa só os 6 bits baixos de `bits`, então sempre é uma casa válida.
+    pub const fn from_low_bits(bits: u16) -> Square {
+        Square((bits & 63) as u8)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +226,15 @@ mod tests {
                 "{bad:?} deveria ser inválida"
             );
         }
+    }
+
+    #[test]
+    fn square_offset_stays_on_the_board() {
+        assert_eq!(sq("e4").offset(1, 2), Some(sq("f6")));
+        assert_eq!(sq("e4").offset(-4, -3), Some(sq("a1")));
+        assert_eq!(sq("a1").offset(-1, 0), None);
+        assert_eq!(sq("h8").offset(0, 1), None);
+        assert_eq!(sq("h4").offset(1, 0), None);
     }
 
     #[test]

@@ -10,4 +10,8 @@ echo "== cargo clippy"
 cargo clippy --all-targets -- -D warnings
 echo "== cargo test"
 cargo test
+if [[ "${1:-}" == "--perft" ]]; then
+    echo "== suítes de perft (release)"
+    cargo test --release --test perft -- --ignored
+fi
 echo "== gate OK"
