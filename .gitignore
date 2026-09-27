@@ -6,3 +6,5 @@
 /tools/
 # Autosave do fastchess (retomada de torneio)
 /config.json
+# Cache do Python
+__pycache__/
