@@ -9,8 +9,11 @@
   Ryzen 5 3600.
 - **Robustez:** `fastchess --compliance` 40/40; 200 partidas de self-play (8+0.08 e 2+0.02) e 240
   do gauntlet sem nenhuma derrota do Caipora por tempo, lance ilegal ou travamento.
-- **Online:** lichess-bot instalado e configuração validada; falta a conta BOT e o token
-  (`docs/lichess.md`).
+- **Online desde 26/09/2026:** conta **caiporaBot** (BOT) no Lichess, rodando no PC do dono
+  (lichess-bot 2026.8.9.2, só partidas casual, sem matchmaking). Primeira partida:
+  <https://lichess.org/P8P6tjJU>, empate de pretas contra o sseh-c (1962 blitz) em 3+2, 126 lances,
+  sem erro nem perda por tempo. O relógio ficou apertado (7 s contra 107 s no lance 92), o que
+  confirma o item 1 da fila.
 
 ## Fila de melhorias
 
