@@ -18,6 +18,10 @@ pub const MATE: i32 = 31_000;
 /// Pontuações além disso são mate em até `MAX_PLY` meios-lances.
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 
+const RFP_MAX_DEPTH: i32 = 8;
+const RFP_MARGIN: i32 = 80;
+const NMP_MIN_DEPTH: i32 = 3;
+
 /// Informação de uma iteração completa, para a linha `info` do UCI.
 #[derive(Clone, Debug)]
 pub struct IterationInfo {
@@ -96,6 +100,7 @@ impl Searcher {
             root_index: history.len(),
             hashes,
             pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
+            after_null: vec![false; MAX_PLY + 2],
         };
         let mut best = SearchResult {
             best_move: Some(first_move),
@@ -159,6 +164,8 @@ struct SearchState<'a> {
     root_index: usize,
     /// Tabela triangular de variante principal: `pv[ply]` é a melhor linha a partir de `ply`.
     pv: Vec<Vec<Move>>,
+    /// `after_null[ply]`: o nó desse nível foi alcançado por um lance nulo (sem dois seguidos).
+    after_null: Vec<bool>,
 }
 
 impl SearchState<'_> {
@@ -265,12 +272,49 @@ impl SearchState<'_> {
             }
         }
 
+        let us = pos.side_to_move();
+        if !pv_node && !in_check && ply > 0 && beta.abs() < MATE_BOUND {
+            let static_eval = evaluate(pos);
+            // Reverse futility: tão acima de beta que nem uma perda de `margem` por nível muda nada.
+            if depth <= RFP_MAX_DEPTH && static_eval - RFP_MARGIN * depth >= beta {
+                return static_eval;
+            }
+            // Null move: se mesmo passando a vez a posição segura beta numa busca rasa, corta.
+            // Sem peças além de peões o risco de zugzwang é alto demais.
+            if !self.after_null[ply]
+                && depth >= NMP_MIN_DEPTH
+                && static_eval >= beta
+                && pos.has_non_pawn_material(us)
+            {
+                let reduction = 3 + depth / 3 + ((static_eval - beta) / 200).min(3);
+                let null = pos.make_null_move();
+                self.hashes.push(null.hash());
+                self.after_null[ply + 1] = true;
+                let score = -self.negamax(
+                    &null,
+                    depth - 1 - reduction,
+                    -beta,
+                    -beta + 1,
+                    ply + 1,
+                    false,
+                );
+                self.after_null[ply + 1] = false;
+                self.hashes.pop();
+                if self.stopped {
+                    return 0;
+                }
+                if score >= beta {
+                    // Mate achado depois de passar a vez não é prova de mate.
+                    return if score >= MATE_BOUND { beta } else { score };
+                }
+            }
+        }
+
         let mut moves = MoveList::new();
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
         score_moves(pos, &moves, tt_move, &mut scores);
 
-        let us = pos.side_to_move();
         let original_alpha = alpha;
         let mut best_score = -INFINITY;
         let mut best_move = None;

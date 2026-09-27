@@ -508,6 +508,26 @@ impl Position {
         !next.is_attacked(next.king_square(self.side_to_move), next.side_to_move)
     }
 
+    /// "Lance nulo" da busca: passa a vez sem mexer peça. Zera o relógio de meio-lances para a
+    /// detecção de repetição não atravessar o lance nulo.
+    pub fn make_null_move(&self) -> Position {
+        let mut next = *self;
+        if let Some(ep) = next.ep_square.take() {
+            next.hash ^= KEYS.en_passant(ep.file());
+        }
+        next.side_to_move = self.side_to_move.flip();
+        next.hash ^= KEYS.side();
+        next.halfmove_clock = 0;
+        next
+    }
+
+    /// O lado tem alguma peça além de peões e rei? Sem isso o lance nulo é perigoso (zugzwang).
+    pub fn has_non_pawn_material(&self, color: Color) -> bool {
+        let pawns_and_king =
+            self.pieces[PieceType::Pawn.index()] | self.pieces[PieceType::King.index()];
+        !(self.colors[color.index()] & !pawns_and_king).is_empty()
+    }
+
     fn apply(&mut self, mv: Move) {
         let us = self.side_to_move;
         let (from, to) = (mv.from(), mv.to());
@@ -881,6 +901,31 @@ mod tests {
 
     /// Partidas pseudoaleatórias: o hash incremental e o invariante mailbox/bitboards precisam se
     /// manter a cada lance.
+    #[test]
+    fn null_move_passes_the_turn_and_keeps_the_hash_consistent() {
+        let pos = Position::from_fen(ROUND_TRIP_FENS[6]).unwrap();
+        assert_eq!(pos.ep_square(), Some(sq("f6")));
+        let null = pos.make_null_move();
+        assert_eq!(null.side_to_move(), Color::Black);
+        assert_eq!(null.ep_square(), None);
+        assert_eq!(null.halfmove_clock(), 0);
+        assert_eq!(null.hash(), null.compute_hash());
+        assert_eq!(null.occupied(), pos.occupied());
+        let back = null.make_null_move();
+        assert_eq!(back.side_to_move(), Color::White);
+        assert_eq!(back.hash(), back.compute_hash());
+    }
+
+    #[test]
+    fn non_pawn_material_detection() {
+        let pawns_only = Position::from_fen("4k3/pppp4/8/8/8/8/4PPPP/4K3 w - - 0 1").unwrap();
+        assert!(!pawns_only.has_non_pawn_material(Color::White));
+        assert!(!pawns_only.has_non_pawn_material(Color::Black));
+        let knight = Position::from_fen("4k3/8/8/8/8/8/4PPPP/4KN2 w - - 0 1").unwrap();
+        assert!(knight.has_non_pawn_material(Color::White));
+        assert!(!knight.has_non_pawn_material(Color::Black));
+    }
+
     #[test]
     fn incremental_hash_matches_full_recomputation() {
         let starts = [
