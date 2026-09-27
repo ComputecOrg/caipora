@@ -145,6 +145,9 @@ def main() -> int:
     parser.add_argument("--matchmaking", action="store_true", help="desafiar outros bots")
     parser.add_argument("--eval-file", help="rede neural (.nnue) passada como EvalFile")
     parser.add_argument(
+        "--threads", type=int, default=1, help="threads da busca (padrão 1; o servidor tem 2)"
+    )
+    parser.add_argument(
         "--opponent-rating",
         nargs=2,
         type=int,
@@ -170,6 +173,8 @@ def main() -> int:
     # Sem a chave o lichess-bot usa os limites absolutos; com valor vazio o validador dele falha.
     config["matchmaking"].pop("opponent_rating_difference", None)
     config["engine"]["uci_options"] = dict(UCI_OPTIONS)
+    if args.threads > 1:
+        config["engine"]["uci_options"]["Threads"] = args.threads
     if args.eval_file:
         eval_file = os.path.abspath(args.eval_file)
         if not os.path.isfile(eval_file):
