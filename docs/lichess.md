@@ -1,0 +1,78 @@
+# Colocando o Caipora no Lichess (conta BOT)
+
+O lichess-bot já está instalado em `C:\Projetos\lichess-bot` (versão 2026.8.9.2, Python 3.14,
+venv em `venv\`). O `config.yml` é gerado e validado pelo script `scripts/lichess_config.py`.
+Falta só o que precisa ser feito por você: a conta e o token.
+
+## 1. Conta nova (irreversível)
+
+1. Crie uma conta **nova** no Lichess, com o nome definitivo (ex.: `CaiporaBot`). **Não jogue
+   nenhuma partida com ela**, nem contra a IA do site: conta com partida não pode virar BOT.
+2. Logado nela, gere um token em
+   <https://lichess.org/account/oauth/token/create?scopes[]=bot:play&description=caipora>
+   (escopo `bot:play`). O token só aparece uma vez.
+3. Guarde o token numa variável de ambiente do Windows, fora do git:
+   ```powershell
+   setx LICHESS_BOT_TOKEN "lip_xxxxxxxxxxxxxxxx"
+   ```
+   Feche e abra o terminal para a variável valer.
+
+## 2. Gerar o config e virar BOT
+
+```powershell
+cd C:\Projetos\ChessAI
+cargo build --release
+cd C:\Projetos\lichess-bot
+venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py --engine C:\Projetos\ChessAI\target\release\caipora.exe
+venv\Scripts\python.exe lichess-bot.py -u      # converte a conta em BOT (uma vez, sem volta)
+venv\Scripts\python.exe lichess-bot.py -v      # começa a jogar
+```
+
+O script já deixa:
+- só opções que o Caipora declara (`Hash 128`, `Move Overhead 100`), sem ponder;
+- livros online, tablebases online e "cloud analysis" **desligados** (senão o bot jogaria lances
+  do Stockfish e o resultado não mediria a nossa engine);
+- `move_overhead` de 2000 ms: do Brasil são ~200 ms por lance até os servidores do Lichess
+  (OVH, Gravelines, França), e o Lichess **não compensa lag de bots**;
+- só desafios **com incremento**, partidas padrão e Chess960, uma de cada vez;
+- **só partidas casual e sem desafiar ninguém** na primeira fase.
+
+## 3. Primeira fase: casual
+
+Nas primeiras 50–100 partidas, acompanhe os PGNs em `C:\Projetos\lichess-bot\game_records` e o
+log: nenhuma derrota por tempo, nenhum lance ilegal, nenhuma queda. Motivos para começar em casual:
+- todo bot novo começa com rating **3000 provisório** e cai rápido nas primeiras partidas rated;
+- a documentação da API pede casual enquanto o bot está em teste.
+
+## 4. Segunda fase: rated e desafios automáticos
+
+```powershell
+venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py --engine C:\Projetos\ChessAI\target\release\caipora.exe --rated --matchmaking
+```
+
+O matchmaking desafia bots com rating até 250 pontos de diferença, a cada 10 minutos parado,
+em 3+2 ou 5+3.
+
+## Regras do Lichess que afetam o bot
+
+- **100 partidas bot contra bot por dia**, contando desafios recebidos; contra humanos não há
+  limite.
+- Sem UltraBullet; sem pools nem Swiss; arenas só quando o organizador libera bots.
+- Partida rated com os mesmos 20 primeiros meios-lances e o mesmo vencedor de uma das 2 anteriores
+  contra o mesmo oponente **não conta** para o rating (detector de farming).
+- O rating de bot no Lichess não mede força de engine acima de ~2500–2700 (comprime). A régua é
+  SPRT local e, depois, a CCRL.
+
+## Transparência (D1)
+
+Coloque na bio da conta algo como: *"Caipora, UCI chess engine in Rust written by Claude Code
+under the direction of Matheus de Carvalho Jesus."*
+
+## Rodar 24 horas
+
+- No PC: como serviço do Windows com o NSSM (o WSL não se mantém vivo sozinho). Desligue a
+  suspensão e ajuste o horário de reinício do Windows Update.
+- Mais tarde, numa VPS perto do Lichess (ver `docs/pesquisa-e-roteiro.md`, seção 8.3).
+
+Para trocar a versão da engine: `quit_after_all_games_finish` está ligado, então Ctrl+C espera as
+partidas terminarem; recompile e suba o bot de novo.

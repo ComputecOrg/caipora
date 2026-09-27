@@ -43,9 +43,22 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
-Quando existir busca: `bench` determinístico batendo com o `Bench:` do commit e partidas curtas de
-fastchess num build de debug (falha em lance ilegal, travamento ou derrota por tempo).
-Atalho local: `bash scripts/gate.sh`.
+Atalho local: `bash scripts/gate.sh` (`--perft` roda também as suítes completas de perft em
+release). O CI (só Linux) roda ainda: suítes de perft, **assinatura do bench** (o último
+`Bench: N` nas mensagens de commit tem de bater com `caipora bench`) e 16 partidas curtas de
+fastchess num build de debug (falha em terminação anormal, lance ilegal ou travamento).
+
+## Bench
+- `cargo run --release -- bench` (profundidade padrão 7, 48 posições fixas). Todo commit que muda
+  o que a busca faz termina com `Bench: <nós>`; os que não mudam, com `No functional change`.
+- A assinatura só pode mudar de propósito. Se mudou sem querer, é bug.
+
+## Ferramentas locais (pasta `tools/`, fora do git)
+- `tools/fastchess/fastchess-windows-x86-64/fastchess.exe` (v1.8.2-alpha) e o livro
+  `tools/8moves_v3.epd`. Regra de CPU da máquina (6 núcleos): `-concurrency 5` no máximo.
+- lichess-bot instalado em `C:\Projetos\lichess-bot` (venv próprio); config gerado por
+  `scripts/lichess_config.py`. Passo a passo em `docs/lichess.md`. O token fica só na variável
+  de ambiente `LICHESS_BOT_TOKEN`, nunca em arquivo.
 
 ## Arquitetura (não mudar sem ruling)
 - Casas em LERF (a1 = 0, h8 = 63). Bitboards por tipo e por cor + mailbox de 64 casas.

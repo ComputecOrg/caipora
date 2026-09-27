@@ -1,4 +1,5 @@
 pub mod attacks;
+pub mod bench;
 pub mod bitboard;
 pub mod eval;
 pub mod movegen;
@@ -8,4 +9,5 @@ pub mod search;
 pub mod timeman;
 pub mod tt;
 pub mod types;
+pub mod uci;
 pub mod zobrist;

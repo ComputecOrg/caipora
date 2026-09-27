@@ -1,10 +1,21 @@
 # Caipora
 
-Caipora is a UCI chess engine written in Rust, in early development.
+Caipora is a UCI chess engine written in Rust.
 
-It is not playable yet. The foundation (board representation, FEN in standard, X-FEN and
-Shredder-FEN notation, Chess960-ready castling rights) is being built test-first; move
-generation validated by perft comes next.
+## Status
+
+First playable version (0.1.0):
+
+- Legal move generation for standard chess and Chess960/DFRC, validated by the full standard
+  (128 positions) and Chess960 (960 positions) perft suites.
+- Alpha-beta search: iterative deepening, aspiration windows, PVS, check extension, quiescence
+  search, transposition table, TT move and MVV-LVA ordering, draw detection (repetition,
+  fifty-move rule, insufficient material), soft/hard time management.
+- Evaluation: material and piece-square terms generated from our own formulas, tapered by game
+  phase. It will be tuned on Caipora's own games and later replaced by an NNUE trained only on
+  self-play data.
+- UCI options: `Hash`, `Threads` (1), `Move Overhead`, `UCI_Chess960`, `Clear Hash`.
+  Extra commands: `bench [depth]`, `go perft N`, `d`, `eval`.
 
 ## AI usage
 
@@ -18,7 +29,7 @@ Requires Rust (the exact toolchain is pinned in `rust-toolchain.toml`).
 
 ```
 cargo build --release
-cargo test
+./target/release/caipora bench     # prints "Bench: <nodes> nodes <nps> nps"
 ```
 
 ## License
