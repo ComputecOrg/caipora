@@ -10,7 +10,7 @@ use crate::movegen::{generate_legal, generate_pseudo_legal};
 use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
 use crate::position::Position;
 use crate::see::see;
-use crate::timeman::Limits;
+use crate::timeman::{Limits, should_start_iteration};
 use crate::tt::{Bound, TranspositionTable};
 use crate::types::{Color, PieceType};
 
@@ -269,10 +269,9 @@ impl Searcher {
                 hashfull: state.tt.hashfull(),
                 pv,
             });
-            let soft_limit_reached = limits
-                .soft_time
-                .is_some_and(|soft| state.start.elapsed() >= soft);
-            if soft_limit_reached || state.stop.load(Ordering::Relaxed) {
+            if !should_start_iteration(state.start.elapsed(), limits)
+                || state.stop.load(Ordering::Relaxed)
+            {
                 break;
             }
         }

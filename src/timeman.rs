@@ -59,12 +59,40 @@ pub fn compute_limits(params: &GoParams, side: Color, move_overhead: Duration) -
     limits
 }
 
+/// Vale começar mais uma iteração? Só antes de 60% do limite suave: a próxima iteração costuma
+/// levar mais que todas as anteriores juntas e, começada tarde, só terminaria no limite duro.
+/// Sem limite suave (depth, nodes, infinite), sempre.
+pub fn should_start_iteration(elapsed: Duration, limits: &Limits) -> bool {
+    limits.soft_time.is_none_or(|soft| elapsed < soft * 6 / 10)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ms(n: u64) -> Option<Duration> {
         Some(Duration::from_millis(n))
+    }
+
+    #[test]
+    fn a_new_iteration_only_starts_before_sixty_percent_of_the_soft_limit() {
+        let limits = Limits {
+            soft_time: ms(1_000),
+            hard_time: ms(4_000),
+            ..Limits::default()
+        };
+        assert!(should_start_iteration(Duration::ZERO, &limits));
+        assert!(should_start_iteration(Duration::from_millis(599), &limits));
+        assert!(!should_start_iteration(Duration::from_millis(600), &limits));
+        assert!(!should_start_iteration(
+            Duration::from_millis(2_000),
+            &limits
+        ));
+        // Sem relógio (depth, nodes, infinite) a iteração seguinte sempre começa.
+        assert!(should_start_iteration(
+            Duration::from_secs(3_600),
+            &Limits::default()
+        ));
     }
 
     #[test]

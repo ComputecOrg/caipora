@@ -146,3 +146,16 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** o binário não roda em CPU sem AVX2 (anteriores a 2013); para esses,
   compilar com `RUSTFLAGS="-C target-cpu=x86-64"`. Um ganho de velocidade medido errado custaria
   pouco Elo e apareceria no próximo gauntlet.
+
+## D13 — 27/09/2026 — Regra dos 60% do tempo entra sem fechar o SPRT
+
+- **Decisão:** encerrar o SPRT de relógio da regra dos 60% (PR #8) em 657 partidas (+187 =286
+  −184, +1,6 Elo) e fazer o merge com base nas duas rodadas somadas: **1322 partidas, +5,0 Elo
+  (IC95% −9 a +19)**, nenhuma perda por tempo. Antecipa o critério da D9 (entra se não for
+  negativa), que previa esperar até ~8000 partidas.
+- **Por quê:** com ganho real perto de 5 Elo, um SPRT [0, 10] levaria milhares de partidas, com 3
+  núcleos por muitas horas. Esses núcleos geram ~1,7 milhão de posições/hora para a primeira NNUE,
+  onde está o ganho grande. A regra deu resultado não negativo nas duas rodadas e reduz o risco de
+  ficar sem tempo online (o Lichess não compensa o lag do Brasil).
+- **Custo se estiver errada:** até ~9 Elo perdidos (limite inferior do intervalo), o que apareceria
+  no próximo gauntlet; reverter é um commit.
