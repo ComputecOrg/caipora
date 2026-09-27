@@ -6,10 +6,12 @@
 //! brancas.
 
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::movegen::generate_legal;
 use crate::moves::Move;
+use crate::nnue::Network;
 use crate::position::Position;
 use crate::search::{Searcher, insufficient_material, is_tactical};
 use crate::timeman::Limits;
@@ -35,6 +37,8 @@ pub struct Config {
     /// Lances aleatórios no começo de cada partida, para variar as aberturas.
     pub random_plies: u32,
     pub seed: u64,
+    /// Rede neural da avaliação; sem ela, a avaliação à mão.
+    pub network: Option<Arc<Network>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +79,7 @@ pub fn run<W: Write>(
     on_game: &mut dyn FnMut(&Progress),
 ) -> io::Result<Progress> {
     let mut searcher = Searcher::new(16);
+    searcher.set_network(config.network.clone());
     let mut rng = Rng::new(config.seed);
     let mut progress = Progress::default();
     while progress.games < config.games {
@@ -261,6 +266,7 @@ mod tests {
             nodes: 400,
             random_plies: 8,
             seed,
+            network: None,
         }
     }
 
@@ -297,6 +303,23 @@ mod tests {
     fn the_same_seed_gives_the_same_data() {
         assert_eq!(generate(&config(2, 7)), generate(&config(2, 7)));
         assert_ne!(generate(&config(2, 7)), generate(&config(2, 8)));
+    }
+
+    #[test]
+    fn a_network_plays_and_scores_the_games() {
+        // Mesma semente, com e sem rede: as partidas (e as pontuações) mudam, e o formato não.
+        let with_net = Config {
+            network: Some(std::sync::Arc::new(crate::nnue::random_network(3))),
+            ..config(2, 7)
+        };
+        let text = generate(&with_net);
+        assert_ne!(text, generate(&config(2, 7)));
+        assert!(text.lines().count() > 10);
+        for line in text.lines() {
+            let fields: Vec<&str> = line.split(" | ").collect();
+            assert_eq!(fields.len(), 3, "{line}");
+            assert!(Position::from_fen(fields[0]).is_ok(), "{line}");
+        }
     }
 
     #[test]
