@@ -9,7 +9,7 @@ use crate::position::Position;
 use crate::search::Searcher;
 use crate::timeman::Limits;
 
-pub const DEFAULT_DEPTH: u32 = 7;
+pub const DEFAULT_DEPTH: u32 = 12;
 
 const STANDARD_SUITE: &str = include_str!("../tests/data/standard.epd");
 const FISCHER_SUITE: &str = include_str!("../tests/data/fischer.epd");
