@@ -53,6 +53,16 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   o que a busca faz termina com `Bench: <nós>`; os que não mudam, com `No functional change`.
 - A assinatura só pode mudar de propósito. Se mudou sem querer, é bug.
 
+## Estado e fila de melhorias
+- `docs/estado.md`: força medida da versão atual, bench e a fila de melhorias com a evidência de
+  cada item. Atualizar a cada release ou medição de força.
+
+## Régua de força
+- `scripts/wsl_gauntlet.sh` (roda no WSL): build Linux, confere o bench e joga gauntlet contra
+  versões do Stash com rating CCRL conhecido. Do Git Bash:
+  `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_gauntlet.sh`.
+  Não rodar junto com outro teste pesado (6 núcleos): disputa de CPU gera perda por tempo falsa.
+
 ## Ferramentas locais (pasta `tools/`, fora do git)
 - `tools/fastchess/fastchess-windows-x86-64/fastchess.exe` (v1.8.2-alpha) e o livro
   `tools/8moves_v3.epd`. Regra de CPU da máquina (6 núcleos): `-concurrency 5` no máximo.
