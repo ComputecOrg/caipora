@@ -167,9 +167,9 @@ case "$cmd" in
         chmod +x fastchess
       fi
       cd sprt/$tag && nohup ../../fastchess \
-        -engine cmd=../../bin/$(basename "$new") name=novo \
+        -engine cmd=../../bin/$(basename "$new") name=novo ${CAIPORA_SPRT_NEW_OPTS:-} \
         -engine cmd=../../bin/$(basename "$base") name=base \
-        -each tc=60+1 nodes=100000 option.Hash=16 \
+        -each ${CAIPORA_SPRT_EACH:-tc=60+1 nodes=100000 option.Hash=16} \
         -openings file=../../8moves_v3.epd format=epd order=random -srand $seed \
         -rounds 20000 -games 2 -repeat -concurrency $conc -recover \
         -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 \
