@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.epd text eol=lf
+*.bin binary
+*.nnue binary
