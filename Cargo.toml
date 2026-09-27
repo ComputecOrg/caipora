@@ -1,0 +1,23 @@
+[package]
+name = "caipora"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+description = "Caipora, a UCI chess engine"
+publish = false
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[profile.dev]
+# Perft em profundidade média fica lento demais sem otimização; asserts e checagem de overflow
+# continuam ligados no perfil de desenvolvimento.
+opt-level = 1
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
