@@ -2,7 +2,10 @@
 # Máquinas spot temporárias na AWS (Estocolmo, eu-north-1) para gerar dados da rede.
 # Rodar no Git Bash, na raiz do repositório, com `aws login` feito.
 #
-#   deploy/aws_spot.sh start <tipo> <horas>
+#   deploy/aws_spot.sh setup
+#       Prepara a região (CAIPORA_AWS_REGION): importa a chave SSH e cria o grupo caipora-ssh com
+#       o IP atual. Pode repetir; também libera o IP novo se o de casa mudar.
+#   deploy/aws_spot.sh start <tipo> <horas> [disco em GB, padrão 40]
 #       Sobe uma máquina spot. Ela se desliga, e é apagada, sozinha depois de <horas>.
 #   deploy/aws_spot.sh datagen <id> <binário linux> <rede> <prefixo> <semente> <horas>
 #       Um `caipora datagen` por núcleo; para sozinho depois de <horas>.
@@ -34,8 +37,29 @@ ip_of() {
 
 cmd=${1:-}
 case "$cmd" in
+  setup)
+    if ! aws_ ec2 describe-key-pairs --key-names caipora >/dev/null 2>&1; then
+      pub=$(mktemp)
+      ssh-keygen -y -f "$KEY" > "$pub"
+      aws_ ec2 import-key-pair --key-name caipora \
+        --public-key-material "fileb://$(cygpath -w "$pub")" --query KeyName --output text
+      rm -f "$pub"
+    fi
+    vpc=$(aws_ ec2 describe-vpcs --filters Name=isDefault,Values=true \
+      --query 'Vpcs[0].VpcId' --output text)
+    sg=$(aws_ ec2 describe-security-groups --filters Name=group-name,Values=caipora-ssh \
+      Name=vpc-id,Values="$vpc" --query 'SecurityGroups[0].GroupId' --output text)
+    if [ "$sg" = "None" ]; then
+      sg=$(aws_ ec2 create-security-group --group-name caipora-ssh --vpc-id "$vpc" \
+        --description "SSH para as maquinas temporarias do Caipora" --query GroupId --output text)
+    fi
+    ip=$(curl -s https://checkip.amazonaws.com | tr -d '\r\n')
+    aws_ ec2 authorize-security-group-ingress --group-id "$sg" --protocol tcp --port 22 \
+      --cidr "$ip/32" >/dev/null 2>&1 || true
+    echo "$REGION pronta: chave caipora, grupo $sg"
+    ;;
   start)
-    type=$2; hours=$3
+    type=$2; hours=$3; disk=${4:-40}
     ami=$(aws_ ssm get-parameter \
       --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
       --query Parameter.Value --output text)
@@ -48,6 +72,8 @@ case "$cmd" in
       --instance-market-options \
         '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}' \
       --instance-initiated-shutdown-behavior terminate \
+      --block-device-mappings \
+        "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":$disk,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
       --user-data "$userdata" \
       --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=caipora-spot},{Key=Project,Value=caipora}]' \
       --query 'Instances[0].InstanceId' --output text)

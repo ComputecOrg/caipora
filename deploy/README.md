@@ -93,7 +93,8 @@ Orçamento do dono: até ~R$ 100/mês. Na conta AWS há:
 Login: `aws login --region eu-north-1` (credenciais temporárias, sem chave fixa no PC).
 
 ```bash
-deploy/aws_spot.sh start c7a.16xlarge 3        # sobe; apaga-se sozinha em 3 h
+deploy/aws_spot.sh setup                       # prepara a região (chave + firewall)
+deploy/aws_spot.sh start c7a.16xlarge 3        # sobe; apaga-se sozinha em 3 h (disco 40 GB)
 deploy/aws_spot.sh datagen <id> tools/caipora-linux-<commit> nets/<rede>.nnue g3 20001 2
 deploy/aws_spot.sh fetch <id> g3               # datagen/g3-aws-<id>.txt.gz
 deploy/aws_spot.sh stop <id>
@@ -108,3 +109,8 @@ deploy/aws_spot.sh list                        # vazio = nada gerando custo
   - subir, copiar o binário estático e a rede, gerar, trazer e apagar, sem sobrar disco;
   - ~240 posições/s por núcleo com a rede, 3 a 4× o ritmo por processo do PC de casa ocupado;
   - estimativa para a c7a.16xlarge: ~55 milhões de posições/h.
+
+- Cada região tem cota própria, e `CAIPORA_AWS_REGION` escolhe a região. Em 27/09/2026 havia
+  32 vCPUs de spot em eu-north-1 (liberados durante a análise do pedido de 192), us-east-1 e
+  us-west-2. Primeira rodada real: 2× c7a.8xlarge, uma em Estocolmo (US$ 0,25/h) e outra na
+  Virgínia (US$ 0,52/h), por ~3 h, gerando os dados g2 com a rede g1.
