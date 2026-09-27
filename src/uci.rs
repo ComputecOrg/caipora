@@ -97,9 +97,16 @@ impl Engine {
             }
             "d" => self.display(),
             "eval" => {
-                let score = evaluate(&self.position);
-                self.out
-                    .line(&format!("info string eval {score} (side to move)"));
+                self.finish_search();
+                let pos = self.position;
+                let line = match self.searcher_mut().network() {
+                    Some(net) => format!(
+                        "info string eval {} (network, side to move)",
+                        net.evaluate(&pos)
+                    ),
+                    None => format!("info string eval {} (side to move)", evaluate(&pos)),
+                };
+                self.out.line(&line);
             }
             "bench" => {
                 self.finish_search();
@@ -635,6 +642,30 @@ mod tests {
             buffer.text()
         );
         assert!(!bestmove(&buffer).is_empty());
+    }
+
+    #[test]
+    fn eval_uses_the_network_when_one_is_loaded() {
+        let file = std::env::temp_dir().join(format!("caipora-eval-{}.nnue", std::process::id()));
+        let bytes = crate::nnue::random_network_bytes(21);
+        std::fs::write(&file, &bytes).unwrap();
+        let expected = Network::from_bytes(&bytes)
+            .unwrap()
+            .evaluate(&Position::startpos());
+        let (mut engine, buffer) = engine();
+        let path = file.to_str().unwrap();
+        send(
+            &mut engine,
+            &[&format!("setoption name EvalFile value {path}"), "eval"],
+        );
+        let text = buffer.text();
+        assert!(
+            text.contains(&format!(
+                "info string eval {expected} (network, side to move)"
+            )),
+            "{text}"
+        );
+        std::fs::remove_file(&file).unwrap();
     }
 
     #[test]

@@ -190,6 +190,11 @@ impl Searcher {
         self.network = network;
     }
 
+    /// A rede em uso, se houver.
+    pub fn network(&self) -> Option<&Network> {
+        self.network.as_deref()
+    }
+
     pub fn resize(&mut self, hash_megabytes: usize) {
         self.tt = TranspositionTable::new(hash_megabytes);
     }
