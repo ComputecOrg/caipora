@@ -243,11 +243,38 @@ static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
     table
 });
 
-pub struct Searcher {
-    tt: TranspositionTable,
+/// O que cada thread aprende por conta própria durante a busca (a TT é de todos).
+struct ThreadTables {
     history: Box<History>,
     continuation: Box<ContinuationHistory>,
     correction: Box<CorrectionHistory>,
+}
+
+impl ThreadTables {
+    fn new() -> ThreadTables {
+        ThreadTables {
+            history: History::new(),
+            continuation: ContinuationHistory::new(),
+            correction: CorrectionHistory::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.history.clear();
+        self.continuation.clear();
+        self.correction.clear();
+    }
+}
+
+/// Pilha dos threads auxiliares: a mesma folga do thread principal (ver `uci`).
+const HELPER_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+pub struct Searcher {
+    tt: TranspositionTable,
+    /// Tabelas do thread principal, que decide o lance e reporta as iterações.
+    main: ThreadTables,
+    /// Uma por thread auxiliar (Lazy SMP): buscam a mesma raiz e só contribuem pela TT.
+    helpers: Vec<ThreadTables>,
     /// Rede neural da avaliação; sem ela, a avaliação à mão.
     network: Option<Arc<Network>>,
 }
@@ -256,9 +283,8 @@ impl Searcher {
     pub fn new(hash_megabytes: usize) -> Searcher {
         Searcher {
             tt: TranspositionTable::new(hash_megabytes),
-            history: History::new(),
-            continuation: ContinuationHistory::new(),
-            correction: CorrectionHistory::new(),
+            main: ThreadTables::new(),
+            helpers: Vec::new(),
             network: None,
         }
     }
@@ -273,20 +299,34 @@ impl Searcher {
         self.network.as_deref()
     }
 
+    /// Número de threads da busca (pelo menos 1, o principal).
+    pub fn set_threads(&mut self, threads: usize) {
+        self.helpers
+            .resize_with(threads.max(1) - 1, ThreadTables::new);
+    }
+
+    pub fn threads(&self) -> usize {
+        self.helpers.len() + 1
+    }
+
     pub fn resize(&mut self, hash_megabytes: usize) {
         self.tt = TranspositionTable::new(hash_megabytes);
     }
 
     pub fn clear(&mut self) {
         self.tt.clear();
-        self.history.clear();
-        self.continuation.clear();
-        self.correction.clear();
+        self.main.clear();
+        for helper in &mut self.helpers {
+            helper.clear();
+        }
     }
 
     /// Busca a partir de `root`. `history` traz os hashes das posições anteriores da partida (sem
     /// a raiz), para reconhecer repetições. A primeira iteração sempre termina, mesmo com `stop`
     /// ligado, para que sempre haja um lance a devolver.
+    ///
+    /// Com mais de um thread, os auxiliares fazem o mesmo aprofundamento iterativo em paralelo e
+    /// só compartilham a TT; param quando o principal termina.
     pub fn search(
         &mut self,
         root: &Position,
@@ -307,52 +347,84 @@ impl Searcher {
             };
         };
         self.tt.new_search();
-        let mut state = self.start(root, history, limits, stop);
-        let mut best = SearchResult {
-            best_move: Some(first_move),
-            score: 0,
-            depth: 0,
-            nodes: 0,
-            pv: vec![first_move],
-        };
         let max_depth = limits.depth.unwrap_or(u32::MAX).min(MAX_PLY as u32 - 1);
-        let mut score = 0;
-        for depth in 1..=max_depth {
-            state.root_depth = depth;
-            state.seldepth = 0;
-            let result = state.aspiration(root, depth as i32, score);
-            if state.stopped {
-                break;
-            }
-            score = result;
-            let pv = state.pv[0].clone();
-            best = SearchResult {
-                best_move: pv.first().copied().or(best.best_move),
-                score,
-                depth,
-                nodes: state.nodes,
-                pv: pv.clone(),
+        let Searcher {
+            tt,
+            main,
+            helpers,
+            network,
+        } = self;
+        let (tt, network) = (&*tt, network.as_deref());
+        let helpers_stop = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = helpers
+                .iter_mut()
+                .map(|tables| {
+                    let helpers_stop = &helpers_stop;
+                    std::thread::Builder::new()
+                        .stack_size(HELPER_STACK_BYTES)
+                        .spawn_scoped(scope, move || {
+                            let mut state =
+                                new_state(tt, tables, network, root, history, limits, helpers_stop);
+                            state.iterate_quietly(root, max_depth);
+                            state.nodes
+                        })
+                        .expect("não conseguiu criar thread auxiliar da busca")
+                })
+                .collect();
+
+            let mut state = new_state(tt, main, network, root, history, limits, stop);
+            let mut best = SearchResult {
+                best_move: Some(first_move),
+                score: 0,
+                depth: 0,
+                nodes: 0,
+                pv: vec![first_move],
             };
-            on_iteration(&IterationInfo {
-                depth,
-                seldepth: state.seldepth as u32,
-                score,
-                nodes: state.nodes,
-                elapsed: state.start.elapsed(),
-                hashfull: state.tt.hashfull(),
-                pv,
-            });
-            if !should_start_iteration(state.start.elapsed(), limits)
-                || state.stop.load(Ordering::Relaxed)
-            {
-                break;
+            let mut score = 0;
+            for depth in 1..=max_depth {
+                state.root_depth = depth;
+                state.seldepth = 0;
+                let result = state.aspiration(root, depth as i32, score);
+                if state.stopped {
+                    break;
+                }
+                score = result;
+                let pv = state.pv[0].clone();
+                best = SearchResult {
+                    best_move: pv.first().copied().or(best.best_move),
+                    score,
+                    depth,
+                    nodes: state.nodes,
+                    pv: pv.clone(),
+                };
+                on_iteration(&IterationInfo {
+                    depth,
+                    seldepth: state.seldepth as u32,
+                    score,
+                    nodes: state.nodes,
+                    elapsed: state.start.elapsed(),
+                    hashfull: state.tt.hashfull(),
+                    pv,
+                });
+                if !should_start_iteration(state.start.elapsed(), limits)
+                    || state.stop.load(Ordering::Relaxed)
+                {
+                    break;
+                }
             }
-        }
-        best.nodes = state.nodes;
-        best
+            helpers_stop.store(true, Ordering::Relaxed);
+            let helper_nodes: u64 = workers
+                .into_iter()
+                .map(|worker| worker.join().expect("thread auxiliar da busca falhou"))
+                .sum();
+            best.nodes = state.nodes + helper_nodes;
+            best
+        })
     }
 
-    /// Estado de uma busca a partir de `root`; `history` como em `search`.
+    /// Estado de uma busca do thread principal a partir de `root`; `history` como em `search`.
+    #[cfg(test)]
     fn start<'a>(
         &'a mut self,
         root: &Position,
@@ -360,35 +432,56 @@ impl Searcher {
         limits: &'a Limits,
         stop: &'a AtomicBool,
     ) -> SearchState<'a> {
-        let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
-        hashes.extend_from_slice(history);
-        hashes.push(root.hash());
         let network = self.network.as_deref();
-        SearchState {
-            accumulators: network.map_or_else(Vec::new, |net| {
-                vec![Accumulators::new(net, root); MAX_PLY + 2]
-            }),
+        new_state(
+            &self.tt,
+            &mut self.main,
             network,
-            tt: &self.tt,
-            history: &mut self.history,
-            continuation: &mut self.continuation,
-            correction: &mut self.correction,
-            killers: vec![[None, None]; MAX_PLY + 2],
-            evals: vec![-INFINITY; MAX_PLY + 2],
-            stop,
+            root,
+            history,
             limits,
-            start: Instant::now(),
-            nodes: 0,
-            poll_counter: 0,
-            seldepth: 0,
-            stopped: false,
-            root_depth: 0,
-            root_index: history.len(),
-            hashes,
-            pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
-            after_null: vec![false; MAX_PLY + 2],
-            moved: vec![None; MAX_PLY + 2],
-        }
+            stop,
+        )
+    }
+}
+
+/// Estado de busca de um thread: a TT e a rede são de todos; as tabelas, deste thread.
+fn new_state<'a>(
+    tt: &'a TranspositionTable,
+    tables: &'a mut ThreadTables,
+    network: Option<&'a Network>,
+    root: &Position,
+    history: &[u64],
+    limits: &'a Limits,
+    stop: &'a AtomicBool,
+) -> SearchState<'a> {
+    let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
+    hashes.extend_from_slice(history);
+    hashes.push(root.hash());
+    SearchState {
+        accumulators: network.map_or_else(Vec::new, |net| {
+            vec![Accumulators::new(net, root); MAX_PLY + 2]
+        }),
+        network,
+        tt,
+        history: &mut tables.history,
+        continuation: &mut tables.continuation,
+        correction: &mut tables.correction,
+        killers: vec![[None, None]; MAX_PLY + 2],
+        evals: vec![-INFINITY; MAX_PLY + 2],
+        stop,
+        limits,
+        start: Instant::now(),
+        nodes: 0,
+        poll_counter: 0,
+        seldepth: 0,
+        stopped: false,
+        root_depth: 0,
+        root_index: history.len(),
+        hashes,
+        pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
+        after_null: vec![false; MAX_PLY + 2],
+        moved: vec![None; MAX_PLY + 2],
     }
 }
 
@@ -425,6 +518,20 @@ struct SearchState<'a> {
 }
 
 impl SearchState<'_> {
+    /// Aprofundamento iterativo de um thread auxiliar: busca até `max_depth` ou até mandarem
+    /// parar, sem reportar; o que acha chega ao principal pela TT.
+    fn iterate_quietly(&mut self, root: &Position, max_depth: u32) {
+        let mut score = 0;
+        for depth in 1..=max_depth {
+            self.root_depth = depth;
+            let result = self.aspiration(root, depth as i32, score);
+            if self.stopped {
+                break;
+            }
+            score = result;
+        }
+    }
+
     /// Janela estreita em volta da pontuação da iteração anterior, alargada a cada falha.
     fn aspiration(&mut self, root: &Position, depth: i32, previous: i32) -> i32 {
         if depth < 4 {
@@ -1453,6 +1560,43 @@ mod tests {
                 "{fen}"
             );
         }
+    }
+
+    #[test]
+    fn a_multithreaded_search_still_finds_the_mate() {
+        let mut searcher = Searcher::new(16);
+        searcher.set_threads(4);
+        assert_eq!(searcher.threads(), 4);
+        // Problema de Morphy: 1.Ra6! e mate no lance seguinte.
+        let pos = Position::from_fen("kbK5/pp6/1P6/8/8/8/8/R7 w - - 0 1").unwrap();
+        let result = searcher.search(&pos, &[], &depth(5), &AtomicBool::new(false), &mut |_| {});
+        assert_eq!(uci(result.best_move), "a1a6");
+        assert_eq!(result.score, MATE - 3);
+    }
+
+    #[test]
+    fn a_multithreaded_search_respects_the_clock_and_counts_every_thread() {
+        let pos = Position::startpos();
+        let limits = Limits {
+            hard_time: Some(Duration::from_millis(150)),
+            soft_time: Some(Duration::from_millis(150)),
+            ..Limits::default()
+        };
+        let run = |threads: usize| {
+            let mut searcher = Searcher::new(16);
+            searcher.set_threads(threads);
+            let start = Instant::now();
+            let result = searcher.search(&pos, &[], &limits, &AtomicBool::new(false), &mut |_| {});
+            assert!(
+                start.elapsed() < Duration::from_millis(1_000),
+                "{:?}",
+                start.elapsed()
+            );
+            assert!(generate_legal(&pos).contains(result.best_move.unwrap()));
+            result.nodes
+        };
+        // No mesmo tempo, quatro threads somam mais nós que um só.
+        assert!(run(4) > run(1));
     }
 
     #[test]

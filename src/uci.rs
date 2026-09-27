@@ -23,6 +23,7 @@ const SEARCH_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 pub const DEFAULT_HASH_MB: usize = 16;
 pub const MAX_HASH_MB: usize = 65_536;
+pub const MAX_THREADS: usize = 256;
 pub const DEFAULT_MOVE_OVERHEAD_MS: u64 = 10;
 
 /// Saída compartilhada entre a thread principal e a da busca; cada linha é escrita e descarregada
@@ -152,7 +153,7 @@ impl Engine {
             format!("id name Caipora {}", env!("CARGO_PKG_VERSION")),
             "id author Matheus de Carvalho Jesus and Claude Code".to_string(),
             format!("option name Hash type spin default {DEFAULT_HASH_MB} min 1 max {MAX_HASH_MB}"),
-            "option name Threads type spin default 1 min 1 max 1".to_string(),
+            format!("option name Threads type spin default 1 min 1 max {MAX_THREADS}"),
             format!(
                 "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD_MS} min 0 max 5000"
             ),
@@ -180,7 +181,14 @@ impl Engine {
                 }
                 Err(_) => self.out.line("info string invalid Hash value"),
             },
-            "threads" => {}
+            "threads" => match value.parse::<usize>() {
+                Ok(threads) => {
+                    self.finish_search();
+                    self.searcher_mut()
+                        .set_threads(threads.clamp(1, MAX_THREADS));
+                }
+                Err(_) => self.out.line("info string invalid Threads value"),
+            },
             "move overhead" => match value.parse::<u64>() {
                 Ok(ms) => self.move_overhead = Duration::from_millis(ms.min(5_000)),
                 Err(_) => self.out.line("info string invalid Move Overhead value"),
@@ -505,7 +513,7 @@ mod tests {
         assert!(text.contains("id author "));
         for option in [
             "option name Hash type spin default 16 min 1 max 65536",
-            "option name Threads type spin default 1 min 1 max 1",
+            "option name Threads type spin default 1 min 1 max 256",
             "option name Move Overhead type spin default 10 min 0 max 5000",
             "option name UCI_Chess960 type check default false",
             "option name Clear Hash type button",
@@ -703,6 +711,23 @@ mod tests {
         );
         assert!(
             buffer.text().contains("(network, side to move)"),
+            "{}",
+            buffer.text()
+        );
+    }
+
+    #[test]
+    fn threads_option_runs_a_multithreaded_search() {
+        let (mut engine, buffer) = engine();
+        send(
+            &mut engine,
+            &["setoption name Threads value 4", "go depth 6"],
+        );
+        engine.wait_for_search();
+        let best = bestmove(&buffer);
+        let moves = generate_legal(&Position::startpos());
+        assert!(
+            moves.iter().any(|m| m.to_uci(false) == best),
             "{}",
             buffer.text()
         );
