@@ -1,5 +1,7 @@
 name: CI
 
+# Só Linux: é o sistema do TCEC e o runner mais barato. O Windows é coberto pelo gate local
+# (a máquina de desenvolvimento é Windows); o build .exe para a CCRL entra quando houver release.
 on:
   push:
     branches: [main]
@@ -7,11 +9,7 @@ on:
 
 jobs:
   gate:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       # O toolchain e os componentes vêm do rust-toolchain.toml.

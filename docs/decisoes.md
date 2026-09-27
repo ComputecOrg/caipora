@@ -57,6 +57,11 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Por quê:** invariantes se provam com testes; força se mede com SPRT. O SPRT sozinho já
   aprovou código com bug (Clockwork, +29,5 Elo com a chave de peões errada).
 - **Custo se estiver errada:** CI mais lento, estimado em alguns minutos por mudança.
+- **Revisão (26/09/2026, pedido do dono):** o CI roda **só em Linux** (sistema do TCEC e runner
+  mais barato; em repositório privado o Windows consome minutos em dobro). O Windows fica coberto
+  pelo gate local (`scripts/gate.sh`), porque a máquina de desenvolvimento é Windows. Um job de
+  build Windows (.exe para a CCRL) entra quando houver o primeiro release. Custo se estiver
+  errada: um bug que só aparece no Windows pode escapar se alguém commitar sem rodar o gate local.
 
 ## D6 — 26/09/2026 — Nome: Caipora
 
@@ -67,9 +72,10 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** renomear o código é barato; a conta do Lichess não muda depois do
   upgrade para BOT.
 
-## D7 — 26/09/2026 — Repositório privado na conta pessoal até a primeira submissão pública
+## D7 — 26/09/2026 — Repositório privado até a primeira submissão pública
 
-- **Decisão:** o repositório fica na conta pessoal do dono no GitHub, **privado** durante o
+- **Decisão:** o repositório fica na conta **ComputecOrg** do dono no GitHub
+  (`ComputecOrg/caipora`, confirmado pelo dono em 26/09/2026), **privado** durante o
   desenvolvimento, e vira público **antes da primeira submissão** ao TCEC (obrigatório) e,
   preferencialmente, antes do anúncio na CCRL. Commits assinados por
   `Matheus de Carvalho Jesus <euescolhoesse@gmail.com>`, com a coautoria do Claude.
