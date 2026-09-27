@@ -138,3 +138,24 @@ fn bench_from_the_command_line_is_deterministic() {
     };
     assert_eq!(run(), run());
 }
+
+#[test]
+fn datagen_from_the_command_line_appends_positions_to_the_file() {
+    let file = std::env::temp_dir().join(format!("caipora-datagen-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let run = || {
+        let status = Command::new(env!("CARGO_BIN_EXE_caipora"))
+            .args(["datagen", "2", file.to_str().unwrap(), "5", "300"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("não conseguiu rodar o datagen");
+        assert!(status.success());
+        std::fs::read_to_string(&file).unwrap().lines().count()
+    };
+    let first = run();
+    assert!(first > 10, "só {first} linhas");
+    // Rodar de novo acrescenta, não sobrescreve.
+    assert_eq!(run(), 2 * first);
+    std::fs::remove_file(&file).unwrap();
+}

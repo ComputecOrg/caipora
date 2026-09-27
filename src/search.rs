@@ -839,7 +839,7 @@ impl SearchState<'_> {
 }
 
 /// Sem peões, torres ou damas e com no máximo uma peça menor: ninguém consegue dar mate.
-fn insufficient_material(pos: &Position) -> bool {
+pub(crate) fn insufficient_material(pos: &Position) -> bool {
     use crate::types::Color::{Black, White};
     let heavy_or_pawn = [PieceType::Pawn, PieceType::Rook, PieceType::Queen]
         .into_iter()
@@ -865,7 +865,7 @@ fn captured_kind(pos: &Position, mv: Move) -> Option<PieceType> {
 }
 
 /// Capturas e promoções a dama: os lances da busca quiescente.
-fn is_tactical(pos: &Position, mv: Move) -> bool {
+pub(crate) fn is_tactical(pos: &Position, mv: Move) -> bool {
     captured_kind(pos, mv).is_some() || mv.kind() == MoveKind::Promotion(PieceType::Queen)
 }
 

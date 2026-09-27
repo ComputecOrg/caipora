@@ -98,3 +98,39 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** o CI em repositório privado consome a cota do plano Free
   (2.000 min/mês; runners Windows contam em dobro). Engine fechada e feita com IA tende a atrair
   mais desconfiança da comunidade, e ao abrir o repositório todo o histórico fica visível.
+
+## D9 — 27/09/2026 — Teste de tempo com relógio, dividindo a máquina
+
+- **Decisão:** o SPRT da regra dos 60% (PR #8) roda a 8+0.08 com `-concurrency 3`, ao mesmo
+  tempo que SPRTs de nós fixos com `-concurrency 2` e o bot do Lichess (1 núcleo quando joga).
+  Limites [0, 10]. Se passar de ~8000 partidas sem decisão, a regra entra só se o placar não for
+  negativo (é a prática padrão e a primeira rodada deu +8), registrando isso no PR.
+- **Por quê:** o dono pediu para começar o teste assim que o bot subisse, sem esperar a
+  madrugada; testes de nós fixos não sofrem com disputa de CPU, e a disputa afeta as duas
+  engines do teste de relógio por igual.
+- **Custo se estiver errada:** ruído a mais no teste de relógio (mais partidas até decidir) e, no
+  pior caso, perdas por tempo falsas. As terminações são conferidas no PGN antes de aceitar.
+
+## D10 — 27/09/2026 — Branches da fase 3 empilhados
+
+- **Decisão:** cada melhoria de busca da fase 3 nasce em cima da anterior (correction history →
+  continuation history → …) e é testada contra o binário da anterior. O PR de cima aponta para o
+  branch de baixo e é redirecionado para a `main` quando o de baixo entra.
+- **Por quê:** testar cada uma contra a `main` e juntar depois mede combinações que ninguém
+  testou, e cada merge exigiria um novo commit de bench.
+- **Custo se estiver errada:** se uma de baixo falhar no SPRT, as de cima precisam de rebase e de
+  novo SPRT (algumas horas de CPU).
+
+## D11 — 27/09/2026 — Primeira NNUE sem passar pelo Texel tuning
+
+- **Decisão:** pular o ajuste da avaliação à mão (Texel tuning, previsto na D8) e ir direto para a
+  NNUE. Dados do `caipora datagen`: 5000 nós por lance, 8 lances aleatórios na abertura (abertura
+  acima de 1000 cp é descartada), só posições quietas (fora de xeque, melhor lance quieto,
+  |pontuação| < 2500), vitória adjudicada com 4 meios-lances a ±2500, empate adjudicado depois do
+  meio-lance 80 com 8 meios-lances dentro de 10 cp.
+- **Por quê:** a NNUE substitui a avaliação à mão, então o trabalho de ajustá-la se perde; os dados
+  gerados com a avaliação atual já trazem o sinal que importa (o resultado das partidas), e as
+  gerações seguintes usam a própria rede.
+- **Custo se estiver errada:** a primeira rede aprende de pontuações de uma avaliação fraca e sai
+  pior do que sairia com dados de uma avaliação ajustada; a segunda geração de dados (com a rede)
+  corrige isso, ao custo de ~1 dia de CPU a mais.
