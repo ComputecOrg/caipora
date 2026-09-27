@@ -58,17 +58,39 @@ pub struct Network {
     output_bias: i16,
 }
 
+/// Maior |peso de saída| aceito: ativação (até QA) × peso precisa caber em 16 bits.
+const MAX_OUTPUT_WEIGHT: i16 = i16::MAX / QA as i16;
+
 #[derive(Debug, PartialEq, Eq)]
-pub struct NetworkSizeError {
-    pub expected: usize,
-    pub found: usize,
+pub enum NetworkError {
+    /// O arquivo não tem o tamanho desta arquitetura.
+    Size { expected: usize, found: usize },
+    /// Peso de saída grande demais para o cálculo em 16 bits.
+    OutputWeightTooLarge { index: usize, value: i16 },
+}
+
+impl std::fmt::Display for NetworkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkError::Size { expected, found } => {
+                write!(f, "{found} bytes, expected {expected}")
+            }
+            NetworkError::OutputWeightTooLarge { index, value } => {
+                write!(
+                    f,
+                    "output weight {index} is {value}, limit {MAX_OUTPUT_WEIGHT}"
+                )
+            }
+        }
+    }
 }
 
 impl Network {
-    /// Lê a rede do formato do arquivo; o tamanho precisa bater exatamente.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Network, NetworkSizeError> {
+    /// Lê a rede do formato do arquivo; o tamanho precisa bater exatamente e os pesos de saída
+    /// precisam caber no cálculo em 16 bits.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Network, NetworkError> {
         if bytes.len() != NETWORK_BYTES {
-            return Err(NetworkSizeError {
+            return Err(NetworkError::Size {
                 expected: NETWORK_BYTES,
                 found: bytes.len(),
             });
@@ -94,6 +116,13 @@ impl Network {
             *slot = value;
         }
         let output_bias = values.next().expect("o tamanho já foi conferido");
+        if let Some((index, &value)) = output_weights
+            .iter()
+            .enumerate()
+            .find(|(_, w)| w.unsigned_abs() > MAX_OUTPUT_WEIGHT.unsigned_abs())
+        {
+            return Err(NetworkError::OutputWeightTooLarge { index, value });
+        }
         Ok(Network {
             feature_weights,
             feature_bias,
@@ -118,8 +147,10 @@ impl Network {
                 .iter()
                 .zip(weights)
                 .map(|(&value, &weight)| {
-                    let clipped = i32::from(value).clamp(0, QA);
-                    clipped * i32::from(weight) * clipped
+                    // v·w cabe em 16 bits (|w| ≤ MAX_OUTPUT_WEIGHT, conferido na leitura); só a
+                    // segunda multiplicação vai para 32. É a forma que vira `pmaddwd` no AVX2.
+                    let clipped = value.clamp(0, QA as i16);
+                    i32::from(clipped * weight) * i32::from(clipped)
                 })
                 .sum()
         };
@@ -269,6 +300,28 @@ mod tests {
         assert!(Network::from_bytes(&[0; 100]).is_err());
         assert!(Network::from_bytes(&vec![0; NETWORK_BYTES + 64]).is_err());
         assert!(Network::from_bytes(&vec![0; NETWORK_BYTES]).is_ok());
+    }
+
+    #[test]
+    fn output_weights_must_fit_a_16_bit_product() {
+        // A saída multiplica ativação (até QA) por peso em 16 bits: |peso| precisa ser ≤ 128.
+        let output_start = 768 * HIDDEN + HIDDEN;
+        let with_weight = |value: i16| {
+            let mut bytes = vec![0u8; NETWORK_BYTES];
+            let index = output_start + 7;
+            bytes[2 * index..2 * index + 2].copy_from_slice(&value.to_le_bytes());
+            Network::from_bytes(&bytes)
+        };
+        assert!(with_weight(128).is_ok());
+        assert!(with_weight(-128).is_ok());
+        assert_eq!(
+            with_weight(129).err(),
+            Some(NetworkError::OutputWeightTooLarge {
+                index: 7,
+                value: 129
+            })
+        );
+        assert!(with_weight(-200).is_err());
     }
 
     #[test]

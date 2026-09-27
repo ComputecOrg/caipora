@@ -134,3 +134,28 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** a primeira rede aprende de pontuações de uma avaliação fraca e sai
   pior do que sairia com dados de uma avaliação ajustada; a segunda geração de dados (com a rede)
   corrige isso, ao custo de ~1 dia de CPU a mais.
+
+## D12 — 27/09/2026 — Build x86-64-v3 e ganhos só de velocidade sem SPRT
+
+- **Decisão:** o build padrão passa a ser `target-cpu=x86-64-v3` (AVX2), em `.cargo/config.toml`.
+  Mudança que só acelera, com o **mesmo bench** (mesmos nós, mesma busca) e ganho de nós/s medido
+  em rodadas alternadas, entra sem SPRT.
+- **Por quê:** mesmo número de nós prova que a busca não mudou; o ganho de velocidade só pode
+  somar Elo. A CPU é o gargalo do projeto e SPRT de relógio custa horas. Medido: +7% de nós/s com a
+  avaliação à mão e +23% com a NNUE (e mais 3% com o produto em 16 bits na saída da rede).
+- **Custo se estiver errada:** o binário não roda em CPU sem AVX2 (anteriores a 2013); para esses,
+  compilar com `RUSTFLAGS="-C target-cpu=x86-64"`. Um ganho de velocidade medido errado custaria
+  pouco Elo e apareceria no próximo gauntlet.
+
+## D13 — 27/09/2026 — Regra dos 60% do tempo entra sem fechar o SPRT
+
+- **Decisão:** encerrar o SPRT de relógio da regra dos 60% (PR #8) em 657 partidas (+187 =286
+  −184, +1,6 Elo) e fazer o merge com base nas duas rodadas somadas: **1322 partidas, +5,0 Elo
+  (IC95% −9 a +19)**, nenhuma perda por tempo. Antecipa o critério da D9 (entra se não for
+  negativa), que previa esperar até ~8000 partidas.
+- **Por quê:** com ganho real perto de 5 Elo, um SPRT [0, 10] levaria milhares de partidas, com 3
+  núcleos por muitas horas. Esses núcleos geram ~1,7 milhão de posições/hora para a primeira NNUE,
+  onde está o ganho grande. A regra deu resultado não negativo nas duas rodadas e reduz o risco de
+  ficar sem tempo online (o Lichess não compensa o lag do Brasil).
+- **Custo se estiver errada:** até ~9 Elo perdidos (limite inferior do intervalo), o que apareceria
+  no próximo gauntlet; reverter é um commit.
