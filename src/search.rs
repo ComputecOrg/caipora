@@ -1575,28 +1575,43 @@ mod tests {
     }
 
     #[test]
-    fn a_multithreaded_search_respects_the_clock_and_counts_every_thread() {
+    fn a_multithreaded_search_respects_the_clock() {
         let pos = Position::startpos();
         let limits = Limits {
             hard_time: Some(Duration::from_millis(150)),
             soft_time: Some(Duration::from_millis(150)),
             ..Limits::default()
         };
+        let mut searcher = Searcher::new(16);
+        searcher.set_threads(4);
+        let start = Instant::now();
+        let result = searcher.search(&pos, &[], &limits, &AtomicBool::new(false), &mut |_| {});
+        assert!(
+            start.elapsed() < Duration::from_millis(1_000),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(generate_legal(&pos).contains(result.best_move.unwrap()));
+    }
+
+    #[test]
+    fn a_multithreaded_search_counts_every_thread() {
+        // Com limite de nós, o principal para no limite com um ou com quatro threads, e cada
+        // auxiliar sempre termina a primeira iteração: a diferença só pode vir dos auxiliares.
+        // (Comparar nós no mesmo tempo oscila quando a máquina está carregada.)
+        let pos = Position::startpos();
+        let limits = Limits {
+            nodes: Some(20_000),
+            ..Limits::default()
+        };
         let run = |threads: usize| {
             let mut searcher = Searcher::new(16);
             searcher.set_threads(threads);
-            let start = Instant::now();
             let result = searcher.search(&pos, &[], &limits, &AtomicBool::new(false), &mut |_| {});
-            assert!(
-                start.elapsed() < Duration::from_millis(1_000),
-                "{:?}",
-                start.elapsed()
-            );
-            assert!(generate_legal(&pos).contains(result.best_move.unwrap()));
             result.nodes
         };
-        // No mesmo tempo, quatro threads somam mais nós que um só.
-        assert!(run(4) > run(1));
+        let (single, multi) = (run(1), run(4));
+        assert!(multi > single, "{multi} nós com 4 threads, {single} com 1");
     }
 
     #[test]

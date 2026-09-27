@@ -23,22 +23,35 @@ rm -rf "$HOME/caipora-trainer" && cp -r "$REPO/trainer" "$HOME/caipora-trainer"
 
 WORK=$HOME/nnue/$ID
 mkdir -p "$WORK" && cd "$WORK"
-rm -f part-*.bin part-*.txt validation.txt
+# O cache de disco da VM ocupa memória do Windows até ser largado; com dezenas de GB de texto
+# passando por aqui, o Windows fica sem memória e a leitura do /mnt/c falha ("Cannot allocate
+# memory", medido em 27/09/2026 com um .gz de 2,6 GB). Larga o cache a cada arquivo.
+release_cache() { sync; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true; }
+
+rm -f part-*.bin part-*.txt validation.txt raw.txt local.gz
+release_cache
 for f in "$REPO"/datagen/"$PREFIX"-*.txt "$REPO"/datagen/"$PREFIX"-*.txt.gz; do
   [ -e "$f" ] || continue
   name=$(basename "$f"); name=${name%.gz}; name=${name%.txt}
-  # Fotografia só com linhas completas (o datagen pode estar escrevendo; .gz vem da AWS).
-  zcat -f "$f" > raw.txt
+  # Fotografia do arquivo (o datagen pode estar escrevendo; .gz vem da AWS). O .gz é copiado
+  # para o disco da VM antes de descomprimir, para ler pouco do /mnt/c.
+  if [ "$f" != "${f%.gz}" ]; then
+    cp "$f" local.gz
+    zcat local.gz > raw.txt
+    rm local.gz
+  else
+    cat "$f" > raw.txt
+  fi
+  # Só as linhas completas: a última pode estar pela metade.
   lines=$(wc -l < raw.txt)
   held=$(( lines / 100 ))
-  head -n "$lines" raw.txt > snapshot.txt
+  head -n $(( lines - held )) raw.txt > "part-$name.txt"
+  head -n "$lines" raw.txt | tail -n "$held" >> validation.txt
   rm raw.txt
-  head -n $(( lines - held )) snapshot.txt > "part-$name.txt"
-  tail -n "$held" snapshot.txt >> validation.txt
-  rm snapshot.txt
   "$UTILS" convert --from text --input "part-$name.txt" --output "part-$name.bin" > /dev/null
   "$UTILS" shuffle --input "part-$name.bin" --output "part-$name-shuf.bin" --mem-used-mb 2048 > /dev/null
   rm "part-$name.txt" "part-$name.bin"
+  release_cache
   echo "$name: $(( lines - held )) posições de treino, $held de validação"
 done
 shuffled=(part-*-shuf.bin)
