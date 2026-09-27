@@ -74,16 +74,30 @@ case "$cmd" in
       --query 'SecurityGroups[0].GroupId' --output text)
     # A própria máquina agenda o desligamento; com "terminate", desligar = apagar.
     userdata=$(printf '#!/bin/bash\nshutdown -h +%d\n' "$((hours * 60))")
-    id=$(aws_ ec2 run-instances --image-id "$ami" --instance-type "$type" --count 1 \
-      --key-name caipora --security-group-ids "$sg" \
-      --instance-market-options \
-        '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}' \
-      --instance-initiated-shutdown-behavior terminate \
-      --block-device-mappings \
-        "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":$disk,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
-      --user-data "$userdata" \
-      --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=caipora-spot},{Key=Project,Value=caipora}]' \
-      --query 'Instances[0].InstanceId' --output text)
+    # Spot usa sobra da AWS: sem capacidade numa zona, tenta as outras da região, da mais barata
+    # para a mais cara no momento.
+    zones=$(aws_ ec2 describe-spot-price-history --instance-types "$type" \
+      --product-descriptions "Linux/UNIX" --start-time "$(date -u +%Y-%m-%dT%H:%M:%S)" \
+      --query 'SpotPriceHistory[].[SpotPrice,AvailabilityZone]' --output text | sort -n | awk '{print $2}' | uniq)
+    id=""
+    for zone in $zones; do
+      if id=$(aws_ ec2 run-instances --image-id "$ami" --instance-type "$type" --count 1 \
+          --key-name caipora --security-group-ids "$sg" --placement "AvailabilityZone=$zone" \
+          --instance-market-options \
+            '{"MarketType":"spot","SpotOptions":{"SpotInstanceType":"one-time","InstanceInterruptionBehavior":"terminate"}}' \
+          --instance-initiated-shutdown-behavior terminate \
+          --block-device-mappings \
+            "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":$disk,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
+          --user-data "$userdata" \
+          --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=caipora-spot},{Key=Project,Value=caipora}]' \
+          --query 'Instances[0].InstanceId' --output text 2>/dev/null); then
+        echo "zona $zone" >&2
+        break
+      fi
+      echo "sem capacidade spot em $zone" >&2
+      id=""
+    done
+    [ -n "$id" ] || { echo "nenhuma zona de $REGION com capacidade para $type" >&2; exit 1; }
     aws_ ec2 wait instance-running --instance-ids "$id"
     ip=$(ip_of "$id")
     for _ in $(seq 1 30); do ssh_ "$ip" true 2>/dev/null && break; sleep 5; done
