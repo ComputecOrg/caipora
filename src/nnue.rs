@@ -249,27 +249,33 @@ impl Accumulators {
     }
 }
 
+/// Bytes de uma rede com pesos pseudoaleatórios pequenos, como o treinador salvaria.
+#[cfg(test)]
+pub(crate) fn random_network_bytes(seed: u64) -> Vec<u8> {
+    let mut state = seed | 1;
+    let mut bytes = Vec::with_capacity(NETWORK_BYTES);
+    for _ in 0..NETWORK_VALUES {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let value = (state % 129) as i16 - 64;
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.resize(NETWORK_BYTES, 0);
+    bytes
+}
+
+#[cfg(test)]
+pub(crate) fn random_network(seed: u64) -> Network {
+    Network::from_bytes(&random_network_bytes(seed)).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::movegen::generate_legal;
     use crate::position::STARTPOS_FEN;
     use crate::types::PieceType;
-
-    /// Rede com pesos pseudoaleatórios pequenos, montada em bytes como o treinador salvaria.
-    fn random_network(seed: u64) -> Network {
-        let mut state = seed | 1;
-        let mut bytes = Vec::with_capacity(NETWORK_BYTES);
-        for _ in 0..NETWORK_VALUES {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            let value = (state % 129) as i16 - 64;
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        bytes.resize(NETWORK_BYTES, 0);
-        Network::from_bytes(&bytes).unwrap()
-    }
 
     fn sq(name: &str) -> Square {
         name.parse().unwrap()

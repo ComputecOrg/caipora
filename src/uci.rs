@@ -11,6 +11,7 @@ use crate::bench;
 use crate::eval::evaluate;
 use crate::movegen::{divide, generate_legal};
 use crate::moves::{Move, MoveKind};
+use crate::nnue::Network;
 use crate::position::Position;
 use crate::search::{IterationInfo, Searcher, uci_score};
 use crate::timeman::{GoParams, compute_limits};
@@ -97,9 +98,16 @@ impl Engine {
             }
             "d" => self.display(),
             "eval" => {
-                let score = evaluate(&self.position);
-                self.out
-                    .line(&format!("info string eval {score} (side to move)"));
+                self.finish_search();
+                let pos = self.position;
+                let line = match self.searcher_mut().network() {
+                    Some(net) => format!(
+                        "info string eval {} (network, side to move)",
+                        net.evaluate(&pos)
+                    ),
+                    None => format!("info string eval {} (side to move)", evaluate(&pos)),
+                };
+                self.out.line(&line);
             }
             "bench" => {
                 self.finish_search();
@@ -146,6 +154,7 @@ impl Engine {
             ),
             "option name UCI_Chess960 type check default false".to_string(),
             "option name Clear Hash type button".to_string(),
+            "option name EvalFile type string default <empty>".to_string(),
             "uciok".to_string(),
         ];
         for line in lines {
@@ -177,9 +186,32 @@ impl Engine {
                 self.finish_search();
                 self.searcher_mut().clear();
             }
+            "evalfile" => self.load_network(&value),
             _ => self
                 .out
                 .line(&format!("info string unknown option: {name}")),
+        }
+    }
+
+    /// `EvalFile`: carrega a rede do arquivo; vazio (ou `<empty>`) volta à avaliação à mão. Em
+    /// caso de erro, avisa e mantém a avaliação que estava.
+    fn load_network(&mut self, path: &str) {
+        self.finish_search();
+        if path.is_empty() || path == "<empty>" {
+            self.searcher_mut().set_network(None);
+            return;
+        }
+        let loaded = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| Network::from_bytes(&bytes).map_err(|e| e.to_string()));
+        match loaded {
+            Ok(net) => {
+                self.searcher_mut().set_network(Some(Arc::new(net)));
+                self.out.line(&format!("info string loaded network {path}"));
+            }
+            Err(error) => self
+                .out
+                .line(&format!("info string cannot load network {path}: {error}")),
         }
     }
 
@@ -464,6 +496,7 @@ mod tests {
             "option name Move Overhead type spin default 10 min 0 max 5000",
             "option name UCI_Chess960 type check default false",
             "option name Clear Hash type button",
+            "option name EvalFile type string default <empty>",
         ] {
             assert!(text.contains(option), "falta {option}");
         }
@@ -570,6 +603,70 @@ mod tests {
         let text = out.text();
         assert!(text.contains("e2e4: 600"), "{text}");
         assert!(text.contains("Nodes searched: 8902"), "{text}");
+    }
+
+    #[test]
+    fn eval_file_loads_a_network_and_reports_errors() {
+        let dir = std::env::temp_dir();
+        let good = dir.join(format!("caipora-net-{}.nnue", std::process::id()));
+        std::fs::write(&good, crate::nnue::random_network_bytes(9)).unwrap();
+        let (mut loaded, buffer) = engine();
+        let path = good.to_str().unwrap();
+        send(
+            &mut loaded,
+            &[
+                &format!("setoption name EvalFile value {path}"),
+                "go depth 4",
+            ],
+        );
+        loaded.wait_for_search();
+        assert!(
+            buffer.text().contains("info string loaded network"),
+            "{}",
+            buffer.text()
+        );
+        assert!(!bestmove(&buffer).is_empty());
+        std::fs::remove_file(&good).unwrap();
+        // Arquivo que não existe ou de tamanho errado: avisa e continua com o que tinha.
+        let (mut missing, buffer) = engine();
+        send(
+            &mut missing,
+            &[
+                "setoption name EvalFile value C:/nao/existe.nnue",
+                "go depth 2",
+            ],
+        );
+        missing.wait_for_search();
+        assert!(
+            buffer.text().contains("info string cannot load network"),
+            "{}",
+            buffer.text()
+        );
+        assert!(!bestmove(&buffer).is_empty());
+    }
+
+    #[test]
+    fn eval_uses_the_network_when_one_is_loaded() {
+        let file = std::env::temp_dir().join(format!("caipora-eval-{}.nnue", std::process::id()));
+        let bytes = crate::nnue::random_network_bytes(21);
+        std::fs::write(&file, &bytes).unwrap();
+        let expected = Network::from_bytes(&bytes)
+            .unwrap()
+            .evaluate(&Position::startpos());
+        let (mut engine, buffer) = engine();
+        let path = file.to_str().unwrap();
+        send(
+            &mut engine,
+            &[&format!("setoption name EvalFile value {path}"), "eval"],
+        );
+        let text = buffer.text();
+        assert!(
+            text.contains(&format!(
+                "info string eval {expected} (network, side to move)"
+            )),
+            "{text}"
+        );
+        std::fs::remove_file(&file).unwrap();
     }
 
     #[test]

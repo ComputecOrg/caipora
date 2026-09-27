@@ -11,6 +11,9 @@
 //! - O alvo de cada posição mistura o resultado da partida (peso `wdl`) com a pontuação da busca
 //!   (peso `1 - wdl`).
 //! - A taxa de aprendizado cai em cosseno até 1% da inicial.
+//!
+//! Conferência: `caipora-trainer eval <checkpoint> <FEN>...` imprime a saída da rede em ponto
+//! flutuante (centipeões, do lado a jogar), para comparar com o `eval` da engine.
 
 use bullet::{
     game::inputs::Chess768,
@@ -30,13 +33,8 @@ const QB: i16 = 64;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "uso: caipora-trainer <dados.bin> <id> <superbatches> [lotes] [wdl] [lr]";
-    let data = args.first().expect(usage).clone();
-    let net_id = args.get(1).expect(usage).clone();
-    let superbatches: usize = args.get(2).expect(usage).parse().expect(usage);
-    let batches: usize = args.get(3).map_or(6104, |v| v.parse().expect(usage));
-    let wdl_weight: f32 = args.get(4).map_or(0.5, |v| v.parse().expect(usage));
-    let initial_lr: f32 = args.get(5).map_or(0.001, |v| v.parse().expect(usage));
+    let usage = "uso: caipora-trainer <dados.bin> <id> <superbatches> [lotes] [wdl] [lr]
+                 ou:  caipora-trainer eval <checkpoint> <FEN>...";
 
     let mut trainer = ValueTrainerBuilder::default()
         .dual_perspective()
@@ -56,6 +54,23 @@ fn main() {
             let ntm_hidden = l0.forward(ntm).screlu();
             l1.forward(stm_hidden.concat(ntm_hidden))
         });
+
+    if args.first().map(String::as_str) == Some("eval") {
+        let checkpoint = args.get(1).expect(usage);
+        trainer.load_from_checkpoint(checkpoint);
+        for fen in &args[2..] {
+            let output = trainer.eval_raw_output(fen)[0] * SCALE as f32;
+            println!("{output:.1} | {fen}");
+        }
+        return;
+    }
+
+    let data = args.first().expect(usage).clone();
+    let net_id = args.get(1).expect(usage).clone();
+    let superbatches: usize = args.get(2).expect(usage).parse().expect(usage);
+    let batches: usize = args.get(3).map_or(6104, |v| v.parse().expect(usage));
+    let wdl_weight: f32 = args.get(4).map_or(0.5, |v| v.parse().expect(usage));
+    let initial_lr: f32 = args.get(5).map_or(0.001, |v| v.parse().expect(usage));
 
     let schedule = TrainingSchedule {
         net_id,
