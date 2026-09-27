@@ -13,10 +13,16 @@ das primeiras dezenas de partidas sem problema (ver docs/lichess.md).
 import argparse
 import os
 import sys
+import time
 
 import chess
 import chess.engine
 import yaml
+
+
+# Substitui (não mescla) as opções UCI do padrão: ele traz Threads 4, SyzygyPath e UCI_ShowWDL,
+# e opção que o Caipora não declara, ou fora da faixa, derruba a engine logo no início da partida.
+UCI_OPTIONS = {"Hash": 128, "Move Overhead": 100}
 
 
 def merge(base: dict, overrides: dict) -> None:
@@ -36,8 +42,6 @@ def overrides(engine_path: str, rated: bool, matchmaking: bool) -> dict:
             "protocol": "uci",
             # O Caipora ainda não implementa ponder.
             "ponder": False,
-            # Só opções que o Caipora declara; opção desconhecida derruba a engine.
-            "uci_options": {"Hash": 128, "Move Overhead": 100},
             "polyglot": {"enabled": False},
             # Nada de lances vindos de fora: o resultado tem de medir a nossa engine.
             "online_moves": {
@@ -82,11 +86,13 @@ def smoke_game(engine_path: str, uci_options: dict, chess960: bool) -> str:
     """Partida curta da engine contra ela mesma, como o lichess-bot a conduz."""
     board = chess.Board.from_chess960_pos(314) if chess960 else chess.Board()
     engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+    increment = 0.1
     try:
         engine.configure(uci_options)
-        clock = {chess.WHITE: 20.0, chess.BLACK: 20.0}
+        # Relógio de verdade: desconta o tempo gasto e soma o incremento a cada lance.
+        clock = {chess.WHITE: 10.0, chess.BLACK: 10.0}
         ply = 0
-        while not board.is_game_over(claim_draw=True) and ply < 80:
+        while not board.is_game_over(claim_draw=True) and ply < 60:
             if ply < 2:
                 # O lichess-bot usa tempo fixo no primeiro lance de cada lado.
                 limit = chess.engine.Limit(time=1.0)
@@ -94,15 +100,25 @@ def smoke_game(engine_path: str, uci_options: dict, chess960: bool) -> str:
                 limit = chess.engine.Limit(
                     white_clock=clock[chess.WHITE],
                     black_clock=clock[chess.BLACK],
-                    white_inc=0.5,
-                    black_inc=0.5,
+                    white_inc=increment,
+                    black_inc=increment,
                 )
+            side = board.turn
+            start = time.monotonic()
             result = engine.play(board, limit)
+            if ply >= 2:
+                clock[side] += increment - (time.monotonic() - start)
+                if clock[side] <= 0:
+                    raise RuntimeError(f"estourou o tempo no meio-lance {ply}")
             if result.move not in board.legal_moves:
                 raise RuntimeError(f"lance ilegal {result.move} em {board.fen()}")
             board.push(result.move)
             ply += 1
-        return f"{'Chess960' if chess960 else 'padrão'}: {ply} meios-lances, {board.result(claim_draw=True)}"
+        variant = "Chess960" if chess960 else "padrão"
+        return (
+            f"{variant}: {ply} meios-lances sem erro; relógio final "
+            f"{clock[chess.WHITE]:.1f}s x {clock[chess.BLACK]:.1f}s"
+        )
     finally:
         engine.quit()
 
@@ -117,6 +133,7 @@ def main() -> int:
     with open("config.yml.default", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     merge(config, overrides(args.engine, args.rated, args.matchmaking))
+    config["engine"]["uci_options"] = dict(UCI_OPTIONS)
     with open("config.yml", "w", encoding="utf-8") as stream:
         yaml.safe_dump(config, stream, sort_keys=False, allow_unicode=True)
     print("config.yml gerado")
