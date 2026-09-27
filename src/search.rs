@@ -13,7 +13,7 @@ use crate::position::Position;
 use crate::see::see;
 use crate::timeman::{Limits, should_start_iteration};
 use crate::tt::{Bound, TranspositionTable};
-use crate::types::{Color, PieceType};
+use crate::types::{Color, Piece, PieceType, Square};
 
 pub const MAX_PLY: usize = 128;
 pub const INFINITY: i32 = 32_000;
@@ -83,13 +83,89 @@ impl History {
 
     /// Soma `bonus` (negativo para punir) com gravidade: nunca passa de `HISTORY_MAX`.
     fn update(&mut self, color: Color, mv: Move, bonus: i32) {
-        let entry = &mut self.table[color.index()][mv.from().index()][mv.to().index()];
-        let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
-        *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
+        apply_bonus(
+            &mut self.table[color.index()][mv.from().index()][mv.to().index()],
+            bonus,
+        );
     }
 
     fn clear(&mut self) {
         self.table = [[[0; 64]; 64]; 2];
+    }
+}
+
+/// Soma `bonus` (negativo para punir) com gravidade: quanto mais perto do teto, menos o valor
+/// anda naquela direção, e nunca passa de `HISTORY_MAX`.
+fn apply_bonus(entry: &mut i32, bonus: i32) {
+    let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
+    *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
+}
+
+/// Um lance visto só pela peça que se moveu e pela casa de destino.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PieceTo {
+    piece: Piece,
+    to: Square,
+}
+
+impl PieceTo {
+    fn index(self) -> usize {
+        (self.piece.color.index() * 6 + self.piece.kind.index()) * 64 + self.to.index()
+    }
+}
+
+/// Uma tabela de histórico por (peça, destino) da resposta.
+type PieceToTable = [[i32; 64]; 12];
+
+/// Histórico de continuação: para cada lance anterior (peça, destino), quais respostas
+/// (peça, destino) causaram corte. Um lance quieto costuma ser bom ou ruim por causa do que
+/// acabou de acontecer no tabuleiro, e o histórico simples não enxerga isso.
+struct ContinuationHistory {
+    tables: Vec<PieceToTable>,
+}
+
+impl ContinuationHistory {
+    fn new() -> Box<ContinuationHistory> {
+        Box::new(ContinuationHistory {
+            tables: vec![[[0; 64]; 12]; 12 * 64],
+        })
+    }
+
+    fn get(&self, previous: PieceTo, piece: Piece, to: Square) -> i32 {
+        let reply = PieceTo { piece, to }.index();
+        self.tables[previous.index()][reply / 64][reply % 64]
+    }
+
+    fn update(&mut self, previous: PieceTo, piece: Piece, to: Square, bonus: i32) {
+        let reply = PieceTo { piece, to }.index();
+        apply_bonus(
+            &mut self.tables[previous.index()][reply / 64][reply % 64],
+            bonus,
+        );
+    }
+
+    fn clear(&mut self) {
+        self.tables.fill([[0; 64]; 12]);
+    }
+}
+
+/// O que ordena os lances quietos de um nó: o histórico simples e as continuações dos dois
+/// lances anteriores (o do adversário e o nosso).
+struct QuietOrdering<'a> {
+    history: &'a History,
+    continuation: &'a ContinuationHistory,
+    previous: [Option<PieceTo>; 2],
+}
+
+impl QuietOrdering<'_> {
+    fn score(&self, pos: &Position, mv: Move) -> i32 {
+        let mut score = self.history.get(pos.side_to_move(), mv);
+        if let Some(piece) = pos.piece_at(mv.from()) {
+            for previous in self.previous.into_iter().flatten() {
+                score += self.continuation.get(previous, piece, mv.to());
+            }
+        }
+        score
     }
 }
 
@@ -170,6 +246,7 @@ static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
 pub struct Searcher {
     tt: TranspositionTable,
     history: Box<History>,
+    continuation: Box<ContinuationHistory>,
     correction: Box<CorrectionHistory>,
     /// Rede neural da avaliação; sem ela, a avaliação à mão.
     network: Option<Arc<Network>>,
@@ -180,6 +257,7 @@ impl Searcher {
         Searcher {
             tt: TranspositionTable::new(hash_megabytes),
             history: History::new(),
+            continuation: ContinuationHistory::new(),
             correction: CorrectionHistory::new(),
             network: None,
         }
@@ -202,6 +280,7 @@ impl Searcher {
     pub fn clear(&mut self) {
         self.tt.clear();
         self.history.clear();
+        self.continuation.clear();
         self.correction.clear();
     }
 
@@ -238,6 +317,7 @@ impl Searcher {
             network,
             tt: &mut self.tt,
             history: &mut self.history,
+            continuation: &mut self.continuation,
             correction: &mut self.correction,
             killers: vec![[None, None]; MAX_PLY + 2],
             evals: vec![-INFINITY; MAX_PLY + 2],
@@ -253,6 +333,7 @@ impl Searcher {
             hashes,
             pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
             after_null: vec![false; MAX_PLY + 2],
+            moved: vec![None; MAX_PLY + 2],
         };
         let mut best = SearchResult {
             best_move: Some(first_move),
@@ -303,6 +384,7 @@ impl Searcher {
 struct SearchState<'a> {
     tt: &'a mut TranspositionTable,
     history: &'a mut History,
+    continuation: &'a mut ContinuationHistory,
     correction: &'a mut CorrectionHistory,
     /// Até dois lances quietos que causaram corte em cada nível.
     killers: Vec<[Option<Move>; 2]>,
@@ -323,6 +405,8 @@ struct SearchState<'a> {
     pv: Vec<Vec<Move>>,
     /// `after_null[ply]`: o nó desse nível foi alcançado por um lance nulo (sem dois seguidos).
     after_null: Vec<bool>,
+    /// `moved[ply]`: lance jogado nesse nível no caminho atual (`None` para o lance nulo).
+    moved: Vec<Option<PieceTo>>,
     network: Option<&'a Network>,
     /// `accumulators[ply]`: camada oculta da rede na posição desse nível (vazio sem rede).
     accumulators: Vec<Accumulators>,
@@ -469,6 +553,7 @@ impl SearchState<'_> {
                 let reduction = 3 + depth / 3 + ((static_eval - beta) / 200).min(3);
                 let null = pos.make_null_move();
                 self.hashes.push(null.hash());
+                self.moved[ply] = None;
                 self.push_null(ply);
                 self.after_null[ply + 1] = true;
                 let score = -self.negamax(
@@ -495,7 +580,12 @@ impl SearchState<'_> {
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
         let killers = self.killers[ply];
-        score_moves(pos, &moves, tt_move, killers, self.history, &mut scores);
+        let ordering = QuietOrdering {
+            history: self.history,
+            continuation: self.continuation,
+            previous: self.previous_moves(ply),
+        };
+        score_moves(pos, &moves, tt_move, killers, &ordering, &mut scores);
 
         let original_alpha = alpha;
         let mut best_score = -INFINITY;
@@ -538,6 +628,9 @@ impl SearchState<'_> {
                 }
             }
             self.hashes.push(next.hash());
+            self.moved[ply] = pos
+                .piece_at(mv.from())
+                .map(|piece| PieceTo { piece, to: mv.to() });
             self.push_move(pos, mv, ply);
             let score = if legal == 1 {
                 -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
@@ -585,7 +678,7 @@ impl SearchState<'_> {
                     self.update_pv(ply, mv);
                     if score >= beta {
                         if quiet {
-                            self.reward_quiet(us, mv, &quiets_tried, depth, ply);
+                            self.reward_quiet(pos, mv, &quiets_tried, depth, ply);
                         }
                         break;
                     }
@@ -645,7 +738,12 @@ impl SearchState<'_> {
         let mut moves = MoveList::new();
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
-        score_moves(pos, &moves, None, [None, None], self.history, &mut scores);
+        let ordering = QuietOrdering {
+            history: self.history,
+            continuation: self.continuation,
+            previous: [None, None],
+        };
+        score_moves(pos, &moves, None, [None, None], &ordering, &mut scores);
         let us = pos.side_to_move();
         let mut legal = 0;
         for index in 0..moves.len() {
@@ -719,16 +817,40 @@ impl SearchState<'_> {
 
     /// Lance quieto que causou corte: bônus no histórico, punição para os quietos que falharam
     /// antes dele, e vira killer deste nível.
-    fn reward_quiet(&mut self, color: Color, mv: Move, tried: &MoveList, depth: i32, ply: usize) {
+    fn reward_quiet(&mut self, pos: &Position, mv: Move, tried: &MoveList, depth: i32, ply: usize) {
         let bonus = (16 * depth * depth).min(1_600);
-        self.history.update(color, mv, bonus);
+        let previous = self.previous_moves(ply);
+        self.update_quiet_histories(pos, previous, mv, bonus);
         for other in tried {
-            self.history.update(color, other, -bonus);
+            self.update_quiet_histories(pos, previous, other, -bonus);
         }
         let slots = &mut self.killers[ply];
         if slots[0] != Some(mv) {
             slots[1] = slots[0];
             slots[0] = Some(mv);
+        }
+    }
+
+    /// Os dois lances que levaram ao nó `ply`: o do adversário e o nosso antes dele.
+    fn previous_moves(&self, ply: usize) -> [Option<PieceTo>; 2] {
+        [
+            ply.checked_sub(1).and_then(|p| self.moved[p]),
+            ply.checked_sub(2).and_then(|p| self.moved[p]),
+        ]
+    }
+
+    fn update_quiet_histories(
+        &mut self,
+        pos: &Position,
+        previous: [Option<PieceTo>; 2],
+        mv: Move,
+        bonus: i32,
+    ) {
+        self.history.update(pos.side_to_move(), mv, bonus);
+        if let Some(piece) = pos.piece_at(mv.from()) {
+            for previous in previous.into_iter().flatten() {
+                self.continuation.update(previous, piece, mv.to(), bonus);
+            }
         }
     }
 
@@ -814,10 +936,9 @@ fn score_moves(
     moves: &MoveList,
     tt_move: Option<Move>,
     killers: [Option<Move>; 2],
-    history: &History,
+    ordering: &QuietOrdering,
     scores: &mut [i32],
 ) {
-    let us = pos.side_to_move();
     for (score, mv) in scores.iter_mut().zip(moves.iter()) {
         *score = if Some(mv) == tt_move {
             1_000_000
@@ -838,7 +959,7 @@ fn score_moves(
         } else if Some(mv) == killers[1] {
             79_000
         } else {
-            history.get(us, mv)
+            ordering.score(pos, mv)
         };
     }
 }
@@ -1144,13 +1265,19 @@ mod tests {
         let mut history = History::new();
         history.update(Color::White, quiet("c4", "b5"), 900);
         let killer = quiet("f3", "g5");
+        let continuation = ContinuationHistory::new();
+        let ordering = QuietOrdering {
+            history: &history,
+            continuation: &continuation,
+            previous: [None, None],
+        };
         let mut scores = [0i32; MAX_MOVES];
         score_moves(
             &pos,
             &moves,
             None,
             [Some(killer), None],
-            &history,
+            &ordering,
             &mut scores,
         );
         let score_of = |uci: &str| {
@@ -1164,6 +1291,62 @@ mod tests {
         assert!(score_of("f3g5") > score_of("c4b5"));
         assert!(score_of("c4b5") > score_of("a2a3"));
         assert!(score_of("a2a3") > score_of("c4f7"));
+    }
+
+    fn piece_to(piece: &str, square: &str) -> PieceTo {
+        PieceTo {
+            piece: Piece::from_fen_char(piece.chars().next().unwrap()).unwrap(),
+            to: square.parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn continuation_history_is_keyed_by_the_previous_move() {
+        let mut continuation = ContinuationHistory::new();
+        let after_e4 = piece_to("P", "e4");
+        let after_d4 = piece_to("P", "d4");
+        let reply = piece_to("n", "c6");
+        continuation.update(after_e4, reply.piece, reply.to, 1_000);
+        assert!(continuation.get(after_e4, reply.piece, reply.to) > 0);
+        assert_eq!(continuation.get(after_d4, reply.piece, reply.to), 0);
+        assert_eq!(
+            continuation.get(after_e4, reply.piece, "f6".parse().unwrap()),
+            0
+        );
+    }
+
+    #[test]
+    fn move_ordering_follows_the_continuation_of_the_previous_move() {
+        // Depois de 1.e4, Nc6 tem histórico de continuação; Nf6 só tem um pouco de histórico
+        // simples. Com o lance anterior conhecido, Nc6 vem antes; sem ele, Nf6.
+        let pos = Position::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")
+            .unwrap();
+        let mut moves = MoveList::new();
+        generate_pseudo_legal(&pos, &mut moves);
+        let mut history = History::new();
+        history.update(Color::Black, quiet("g8", "f6"), 100);
+        let mut continuation = ContinuationHistory::new();
+        let after_e4 = piece_to("P", "e4");
+        let knight = piece_to("n", "c6");
+        continuation.update(after_e4, knight.piece, knight.to, 2_000);
+        let order = |previous: [Option<PieceTo>; 2]| {
+            let ordering = QuietOrdering {
+                history: &history,
+                continuation: &continuation,
+                previous,
+            };
+            let mut scores = [0i32; MAX_MOVES];
+            score_moves(&pos, &moves, None, [None, None], &ordering, &mut scores);
+            let score_of = |uci: &str| {
+                let i = moves.iter().position(|m| m.to_uci(false) == uci).unwrap();
+                scores[i]
+            };
+            (score_of("b8c6"), score_of("g8f6"))
+        };
+        let (c6, f6) = order([Some(after_e4), None]);
+        assert!(c6 > f6, "{c6} {f6}");
+        let (c6, f6) = order([None, None]);
+        assert!(f6 > c6, "{c6} {f6}");
     }
 
     #[test]
