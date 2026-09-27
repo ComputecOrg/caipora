@@ -75,3 +75,36 @@ ssh $S 'systemctl daemon-reload && systemctl enable --now caipora-bot'
 - Quedas da engine: `/opt/caipora/lichess-bot/engines/caipora-crash.log`.
 - Trocar de versão: copiar o binário novo, gerar o config de novo (passo 3) e rodar
   `systemctl restart caipora-bot`. A parada espera as partidas em andamento terminarem.
+
+# Máquinas temporárias na AWS (dados da rede e, depois, SPRTs)
+
+Orçamento do dono: até ~R$ 100/mês. Na conta AWS há:
+
+- **Orçamento `Caipora - computacao`:** US$ 18,62/mês, com e-mail a 50%, 80% e 100% do gasto real
+  e na previsão de 100%.
+- **Região eu-north-1 (Estocolmo):** foi a mais barata por núcleo em 27/09/2026. c7a.16xlarge
+  (64 núcleos Zen 4, sem SMT) a US$ 0,367/h no spot, ~R$ 2/h.
+- **Cota de spot:** 5 vCPUs de fábrica. Pedido de aumento para 192 enviado em 27/09/2026.
+- **Chave SSH `caipora`:** `~/.ssh/caipora-aws.pem`, só no PC do dono. O `aws.exe` a salvou com
+  CRLF, e foi preciso converter para LF (`tr -d '\r'`) e restringir com `icacls`.
+- **Grupo `caipora-ssh`:** porta 22 aberta só para o IP do dono. Se o IP de casa mudar, atualizar
+  a regra.
+
+Login: `aws login --region eu-north-1` (credenciais temporárias, sem chave fixa no PC).
+
+```bash
+deploy/aws_spot.sh start c7a.16xlarge 3        # sobe; apaga-se sozinha em 3 h
+deploy/aws_spot.sh datagen <id> tools/caipora-linux-<commit> nets/<rede>.nnue g3 20001 2
+deploy/aws_spot.sh fetch <id> g3               # datagen/g3-aws-<id>.txt.gz
+deploy/aws_spot.sh stop <id>
+deploy/aws_spot.sh list                        # vazio = nada gerando custo
+```
+
+- **Travas contra máquina esquecida:** cada máquina agenda o próprio desligamento com
+  "terminate", então desligar = apagar, e o disco vai junto.
+- **Interrupção do spot:** a AWS pode tomar a máquina de volta a qualquer momento. Dados não
+  trazidos com `fetch` se perdem; em rodadas longas, trazer de tempos em tempos.
+- **Teste de 27/09/2026 (c7a.large, 2 núcleos, < US$ 0,01):**
+  - subir, copiar o binário estático e a rede, gerar, trazer e apagar, sem sobrar disco;
+  - ~240 posições/s por núcleo com a rede, 3 a 4× o ritmo por processo do PC de casa ocupado;
+  - estimativa para a c7a.16xlarge: ~55 milhões de posições/h.
