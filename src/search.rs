@@ -307,35 +307,7 @@ impl Searcher {
             };
         };
         self.tt.new_search();
-        let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
-        hashes.extend_from_slice(history);
-        hashes.push(root.hash());
-        let network = self.network.as_deref();
-        let mut state = SearchState {
-            accumulators: network.map_or_else(Vec::new, |net| {
-                vec![Accumulators::new(net, root); MAX_PLY + 2]
-            }),
-            network,
-            tt: &mut self.tt,
-            history: &mut self.history,
-            continuation: &mut self.continuation,
-            correction: &mut self.correction,
-            killers: vec![[None, None]; MAX_PLY + 2],
-            evals: vec![-INFINITY; MAX_PLY + 2],
-            stop,
-            limits,
-            start: Instant::now(),
-            nodes: 0,
-            poll_counter: 0,
-            seldepth: 0,
-            stopped: false,
-            root_depth: 0,
-            root_index: history.len(),
-            hashes,
-            pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
-            after_null: vec![false; MAX_PLY + 2],
-            moved: vec![None; MAX_PLY + 2],
-        };
+        let mut state = self.start(root, history, limits, stop);
         let mut best = SearchResult {
             best_move: Some(first_move),
             score: 0,
@@ -378,6 +350,45 @@ impl Searcher {
         }
         best.nodes = state.nodes;
         best
+    }
+
+    /// Estado de uma busca a partir de `root`; `history` como em `search`.
+    fn start<'a>(
+        &'a mut self,
+        root: &Position,
+        history: &[u64],
+        limits: &'a Limits,
+        stop: &'a AtomicBool,
+    ) -> SearchState<'a> {
+        let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
+        hashes.extend_from_slice(history);
+        hashes.push(root.hash());
+        let network = self.network.as_deref();
+        SearchState {
+            accumulators: network.map_or_else(Vec::new, |net| {
+                vec![Accumulators::new(net, root); MAX_PLY + 2]
+            }),
+            network,
+            tt: &mut self.tt,
+            history: &mut self.history,
+            continuation: &mut self.continuation,
+            correction: &mut self.correction,
+            killers: vec![[None, None]; MAX_PLY + 2],
+            evals: vec![-INFINITY; MAX_PLY + 2],
+            stop,
+            limits,
+            start: Instant::now(),
+            nodes: 0,
+            poll_counter: 0,
+            seldepth: 0,
+            stopped: false,
+            root_depth: 0,
+            root_index: history.len(),
+            hashes,
+            pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
+            after_null: vec![false; MAX_PLY + 2],
+            moved: vec![None; MAX_PLY + 2],
+        }
     }
 }
 
@@ -714,7 +725,8 @@ impl SearchState<'_> {
         best_score
     }
 
-    /// Só capturas e promoções a dama, até a posição "acalmar"; em xeque, todas as evasões.
+    /// Só capturas e promoções a dama, até a posição "acalmar"; em xeque, todas as evasões. Usa e
+    /// alimenta a TT (profundidade 0).
     fn quiescence(&mut self, pos: &Position, mut alpha: i32, beta: i32, ply: usize) -> i32 {
         self.pv[ply].clear();
         if self.should_stop() {
@@ -725,6 +737,20 @@ impl SearchState<'_> {
         if ply >= MAX_PLY - 1 {
             return self.raw_eval(pos, ply);
         }
+        let entry = self.tt.probe(pos.hash());
+        if let Some(entry) = entry {
+            let score = score_from_tt(entry.score, ply);
+            let usable = match entry.bound {
+                Bound::Exact => true,
+                Bound::Lower => score >= beta,
+                Bound::Upper => score <= alpha,
+            };
+            if usable {
+                return score;
+            }
+        }
+        let tt_move = entry.and_then(|e| e.mv);
+        let original_alpha = alpha;
         let in_check = pos.in_check();
         let mut best_score = if in_check {
             -INFINITY
@@ -744,9 +770,10 @@ impl SearchState<'_> {
             continuation: self.continuation,
             previous: [None, None],
         };
-        score_moves(pos, &moves, None, [None, None], &ordering, &mut scores);
+        score_moves(pos, &moves, tt_move, [None, None], &ordering, &mut scores);
         let us = pos.side_to_move();
         let mut legal = 0;
+        let mut best_move = None;
         for index in 0..moves.len() {
             let mv = pick_next(&mut moves, &mut scores, index);
             if !in_check && (!is_tactical(pos, mv) || see(pos, mv) < 0) {
@@ -766,6 +793,7 @@ impl SearchState<'_> {
                 best_score = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = Some(mv);
                     if score >= beta {
                         break;
                     }
@@ -775,6 +803,20 @@ impl SearchState<'_> {
         if in_check && legal == 0 {
             return -MATE + ply as i32;
         }
+        let bound = if best_score >= beta {
+            Bound::Lower
+        } else if best_score > original_alpha {
+            Bound::Exact
+        } else {
+            Bound::Upper
+        };
+        self.tt.store(
+            pos.hash(),
+            best_move,
+            score_to_tt(best_score, ply),
+            0,
+            bound,
+        );
         best_score
     }
 
@@ -1348,6 +1390,32 @@ mod tests {
         assert!(c6 > f6, "{c6} {f6}");
         let (c6, f6) = order([None, None]);
         assert!(f6 > c6, "{c6} {f6}");
+    }
+
+    #[test]
+    fn quiescence_stores_its_result_and_trusts_the_tt() {
+        let stop = AtomicBool::new(false);
+        let limits = Limits::default();
+        let mut searcher = Searcher::new(16);
+        // A dama preta está solta: a quiescente acha Txd5 e grava o lance com profundidade 0.
+        let pos = Position::from_fen("4k3/8/8/3q4/8/8/8/3RK3 w - - 0 1").unwrap();
+        let score = searcher
+            .start(&pos, &[], &limits, &stop)
+            .quiescence(&pos, -INFINITY, INFINITY, 0);
+        assert!(score > 300, "{score}");
+        let entry = searcher
+            .tt
+            .probe(pos.hash())
+            .expect("a quiescente grava na TT");
+        assert_eq!(entry.depth, 0);
+        assert_eq!(entry.mv.map(|m| m.to_uci(false)), Some("d1d5".to_string()));
+        assert_eq!((entry.score, entry.bound), (score, Bound::Exact));
+        // Uma entrada exata de uma busca mais funda manda: a quiescente devolve o valor dela.
+        searcher.tt.store(pos.hash(), None, 777, 4, Bound::Exact);
+        let score = searcher
+            .start(&pos, &[], &limits, &stop)
+            .quiescence(&pos, -INFINITY, INFINITY, 0);
+        assert_eq!(score, 777);
     }
 
     #[test]
