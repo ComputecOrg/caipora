@@ -13,7 +13,9 @@
 #       Traz os arquivos datagen/<prefixo>-*.txt, compactados.
 #   deploy/aws_spot.sh sprt <id> <binário novo> <binário base> <tag> <concorrência> [semente]
 #       SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]) em segundo plano, numa pasta por tag.
-#       Várias tags podem rodar juntas, repartindo os núcleos.
+#       Várias tags podem rodar juntas, repartindo os núcleos. CAIPORA_SPRT_EACH troca as opções
+#       dos dois lados (ex.: "tc=8+0.08 option.Hash=16", para relógio) e CAIPORA_SPRT_NEW_OPTS
+#       acrescenta opções só ao lado novo (ex.: "option.Threads=2").
 #   deploy/aws_spot.sh sprt-status <id>
 #       Placar de cada SPRT (partidas, Elo, LLR, se terminou e as terminações).
 #   deploy/aws_spot.sh sprt-fetch <id>
