@@ -159,3 +159,36 @@ fn datagen_from_the_command_line_appends_positions_to_the_file() {
     assert_eq!(run(), 2 * first);
     std::fs::remove_file(&file).unwrap();
 }
+
+#[test]
+fn validate_prints_the_loss_of_a_network_on_positions() {
+    let dir = std::env::temp_dir();
+    let id = std::process::id();
+    let net = dir.join(format!("caipora-validate-{id}.nnue"));
+    let data = dir.join(format!("caipora-validate-{id}.txt"));
+    // Rede zerada (avalia 0 = 50%) e uma vitória das brancas: perda (0,5 − 1)² = 0,25.
+    std::fs::write(&net, vec![0u8; caipora::nnue::NETWORK_BYTES]).unwrap();
+    std::fs::write(
+        &data,
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0 | 1.0\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_caipora"))
+        .args([
+            "validate",
+            net.to_str().unwrap(),
+            data.to_str().unwrap(),
+            "1.0",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("não conseguiu rodar o validate");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("validation loss 0.250000 over 1 positions (wdl 1)"),
+        "{stdout}"
+    );
+    std::fs::remove_file(&net).unwrap();
+    std::fs::remove_file(&data).unwrap();
+}

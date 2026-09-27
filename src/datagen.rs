@@ -192,6 +192,43 @@ fn is_recordable(pos: &Position, best: Move, score: i32) -> bool {
     !pos.in_check() && !is_tactical(pos, best) && score.abs() < ADJUDICATE_WIN
 }
 
+/// Perda de uma avaliação (a rede ou a feita à mão) em posições no formato do datagen, a mesma que o treino minimiza: média de
+/// (sigmoide(avaliação/400) − alvo)², com alvo = wdl·resultado + (1 − wdl)·sigmoide(pontuação/400),
+/// tudo do ponto de vista do lado a jogar. Devolve a perda e quantas linhas entraram (linhas que
+/// não se leem são puladas); `None` se nenhuma entrou.
+pub fn validation_loss(
+    evaluate: &dyn Fn(&Position) -> i32,
+    text: &str,
+    wdl: f64,
+) -> Option<(f64, usize)> {
+    let sigmoid = |cp: f64| 1.0 / (1.0 + (-cp / 400.0).exp());
+    let mut total = 0.0;
+    let mut count = 0;
+    for line in text.lines() {
+        let mut fields = line.split(" | ");
+        let (Some(fen), Some(score), Some(result)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (Ok(pos), Ok(score), Ok(result)) = (
+            Position::from_fen(fen),
+            score.trim().parse::<f64>(),
+            result.trim().parse::<f64>(),
+        ) else {
+            continue;
+        };
+        let (score, result) = match pos.side_to_move() {
+            Color::White => (score, result),
+            Color::Black => (-score, 1.0 - result),
+        };
+        let target = wdl * result + (1.0 - wdl) * sigmoid(score);
+        let predicted = sigmoid(f64::from(evaluate(&pos)));
+        total += (predicted - target).powi(2);
+        count += 1;
+    }
+    (count > 0).then(|| (total / count as f64, count))
+}
+
 /// xorshift64* (Vigna): sorteio reprodutível pela semente.
 struct Rng(u64);
 
@@ -291,6 +328,36 @@ mod tests {
         assert!(!is_recordable(&promotion, find(&promotion, "a7a8q"), 800));
         let check = Position::from_fen("4k3/8/8/8/8/8/8/4RK2 b - - 0 1").unwrap();
         assert!(!is_recordable(&check, find(&check, "e8d7"), -500));
+    }
+
+    #[test]
+    fn validation_loss_matches_the_training_target() {
+        // Rede zerada: avalia tudo em 0, ou seja, 50% para o lado a jogar.
+        let net = crate::nnue::Network::from_bytes(&vec![0; crate::nnue::NETWORK_BYTES]).unwrap();
+        let start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+        // Só o resultado (wdl = 1): vitória das brancas, vista pelo lado a jogar.
+        let white = format!("{start} w KQkq - 0 1 | 0 | 1.0\n");
+        let black = format!("{start} b KQkq - 0 1 | 0 | 1.0\n");
+        let with_net = |pos: &Position| net.evaluate(pos);
+        let (loss, count) = validation_loss(&with_net, &white, 1.0).unwrap();
+        assert_eq!(count, 1);
+        assert!((loss - 0.25).abs() < 1e-9, "{loss}");
+        let (loss, _) = validation_loss(&with_net, &black, 1.0).unwrap();
+        assert!((loss - 0.25).abs() < 1e-9, "{loss}");
+        // Só a pontuação (wdl = 0): +400 cp vira sigmoide(1) ≈ 0,731.
+        let score = format!("{start} w KQkq - 0 1 | 400 | 0.5\n");
+        let (loss, _) = validation_loss(&with_net, &score, 0.0).unwrap();
+        let target = 1.0 / (1.0 + (-1.0f64).exp());
+        assert!((loss - (0.5 - target).powi(2)).abs() < 1e-9, "{loss}");
+        // Linhas estragadas são ignoradas; sem nenhuma válida não há perda.
+        let (_, count) = validation_loss(&with_net, &format!("lixo\n{white}"), 1.0).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(validation_loss(&with_net, "lixo\n", 1.0), None);
+        // Qualquer avaliação serve, inclusive a feita à mão (a linha de base).
+        let hce = crate::eval::evaluate(&Position::startpos());
+        let (loss, _) = validation_loss(&crate::eval::evaluate, &white, 1.0).unwrap();
+        let expected = (1.0 / (1.0 + (-f64::from(hce) / 400.0).exp()) - 1.0).powi(2);
+        assert!((loss - expected).abs() < 1e-9, "{loss}");
     }
 
     #[test]
