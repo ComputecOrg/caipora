@@ -1,0 +1,13 @@
+[package]
+name = "caipora-trainer"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Trains Caipora's NNUE with bullet on the GPU"
+publish = false
+
+# Fora do crate da engine: o bullet (MIT) e o CUDA só são necessários para treinar.
+[workspace]
+
+[dependencies]
+bullet = { git = "https://github.com/jw1912/bullet", rev = "c004ebf04025edf91c6ccac47e72d561062a46b5", package = "bullet_lib", features = ["cuda"] }
