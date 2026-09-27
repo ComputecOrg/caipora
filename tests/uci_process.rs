@@ -138,3 +138,90 @@ fn bench_from_the_command_line_is_deterministic() {
     };
     assert_eq!(run(), run());
 }
+
+#[test]
+fn datagen_from_the_command_line_appends_positions_to_the_file() {
+    let file = std::env::temp_dir().join(format!("caipora-datagen-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let run = || {
+        let status = Command::new(env!("CARGO_BIN_EXE_caipora"))
+            .args(["datagen", "2", file.to_str().unwrap(), "5", "300"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("não conseguiu rodar o datagen");
+        assert!(status.success());
+        std::fs::read_to_string(&file).unwrap().lines().count()
+    };
+    let first = run();
+    assert!(first > 10, "só {first} linhas");
+    // Rodar de novo acrescenta, não sobrescreve.
+    assert_eq!(run(), 2 * first);
+    std::fs::remove_file(&file).unwrap();
+}
+
+#[test]
+fn validate_prints_the_loss_of_a_network_on_positions() {
+    let dir = std::env::temp_dir();
+    let id = std::process::id();
+    let net = dir.join(format!("caipora-validate-{id}.nnue"));
+    let data = dir.join(format!("caipora-validate-{id}.txt"));
+    // Rede zerada (avalia 0 = 50%) e uma vitória das brancas: perda (0,5 − 1)² = 0,25.
+    std::fs::write(&net, vec![0u8; caipora::nnue::NETWORK_BYTES]).unwrap();
+    std::fs::write(
+        &data,
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0 | 1.0\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_caipora"))
+        .args([
+            "validate",
+            net.to_str().unwrap(),
+            data.to_str().unwrap(),
+            "1.0",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("não conseguiu rodar o validate");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("validation loss 0.250000 over 1 positions (wdl 1)"),
+        "{stdout}"
+    );
+    std::fs::remove_file(&net).unwrap();
+    std::fs::remove_file(&data).unwrap();
+}
+
+#[test]
+fn datagen_plays_with_a_network_given_on_the_command_line() {
+    let dir = std::env::temp_dir();
+    let id = std::process::id();
+    let net = dir.join(format!("caipora-datagen-net-{id}.nnue"));
+    let file = dir.join(format!("caipora-datagen-net-{id}.txt"));
+    let _ = std::fs::remove_file(&file);
+    // Rede zerada: avalia tudo em 0, então toda posição gravada tem pontuação 0.
+    std::fs::write(&net, vec![0u8; caipora::nnue::NETWORK_BYTES]).unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_caipora"))
+        .args([
+            "datagen",
+            "3",
+            file.to_str().unwrap(),
+            "5",
+            "300",
+            net.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("não conseguiu rodar o datagen");
+    assert!(status.success());
+    let text = std::fs::read_to_string(&file).unwrap();
+    // Com tudo valendo 0 as partidas acabam cedo (repetição); o que importa é a pontuação.
+    assert!(text.lines().count() > 0, "{text}");
+    for line in text.lines() {
+        assert_eq!(line.split(" | ").nth(1), Some("0"), "{line}");
+    }
+    std::fs::remove_file(&net).unwrap();
+    std::fs::remove_file(&file).unwrap();
+}

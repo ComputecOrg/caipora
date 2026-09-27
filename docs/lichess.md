@@ -53,6 +53,20 @@ venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py --engine C
 O matchmaking desafia bots com rating até 250 pontos de diferença, a cada 10 minutos parado,
 em 3+2 ou 5+3.
 
+## Rede neural e faixa de adversários
+
+```powershell
+venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py `
+  --engine C:\Projetos\lichess-bot\engines\<caipora>.exe `
+  --eval-file C:\Projetos\lichess-bot\engines\<rede>.nnue --matchmaking
+```
+
+- `--eval-file` passa a rede como `EvalFile`; as duas partidas de fumaça já jogam com ela.
+- `--opponent-rating MIN MAX` (padrão 2000 a 2600) limita os bots que o matchmaking desafia, em
+  valores absolutos. Em partidas casual o rating do bot fica no provisório de 3000, e a
+  diferença relativa do padrão (±300) só achava bots de 2750 para cima: das 10 primeiras
+  partidas, 9 derrotas e 1 empate contra adversários bem mais fortes.
+
 ## Regras do Lichess que afetam o bot
 
 - **100 partidas bot contra bot por dia**, contando desafios recebidos; contra humanos não há
@@ -67,6 +81,22 @@ em 3+2 ou 5+3.
 
 Coloque na bio da conta algo como: *"Caipora, UCI chess engine in Rust written by Claude Code
 under the direction of Matheus de Carvalho Jesus."*
+
+## Patch local no lichess-bot (partida repetida)
+
+O Lichess às vezes manda o evento `gameStart` duas vezes para a mesma partida. O lichess-bot
+2026.8.9.2 (e a versão oficial, em 27/09/2026) abre então dois processos para ela. O segundo
+recebe HTTP 429 no stream da partida e pode derrubar o jogo: foi o que aconteceu em
+<https://lichess.org/m7pWoX1F>, abandonada.
+
+O patch `scripts/lichess-bot-duplicate-gamestart.patch` guarda os ids das partidas já
+iniciadas, ignora o `gameStart` repetido e libera o id quando a partida acaba. Reaplicar depois de
+cada atualização do lichess-bot:
+
+```powershell
+cd C:\Projetos\lichess-bot
+git apply C:\Projetos\ChessAI\scripts\lichess-bot-duplicate-gamestart.patch
+```
 
 ## Rodar 24 horas
 

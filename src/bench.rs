@@ -43,8 +43,10 @@ impl BenchResult {
     }
 }
 
+/// Com a rede embutida, como a engine joga por padrão.
 pub fn run(depth: u32) -> BenchResult {
     let mut searcher = Searcher::new(16);
+    searcher.set_network(Some(crate::nnue::embedded()));
     let limits = Limits {
         depth: Some(depth),
         ..Limits::default()
