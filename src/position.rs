@@ -113,6 +113,8 @@ pub struct Position {
     halfmove_clock: u32,
     fullmove_number: u32,
     hash: u64,
+    /// Hash Zobrist só dos peões (estrutura de peões), para tabelas indexadas por ela.
+    pawn_hash: u64,
 }
 
 impl Position {
@@ -148,6 +150,7 @@ impl Position {
         pos.halfmove_clock = parse_counter(fields.get(4), 0)?;
         pos.fullmove_number = parse_counter(fields.get(5), 1)?;
         pos.hash = pos.compute_hash();
+        pos.pawn_hash = pos.compute_pawn_hash();
         Ok(pos)
     }
 
@@ -212,6 +215,7 @@ impl Position {
             halfmove_clock: 0,
             fullmove_number: 1,
             hash: 0,
+            pawn_hash: 0,
         }
     }
 
@@ -221,6 +225,9 @@ impl Position {
         self.colors[piece.color.index()] |= bb;
         self.mailbox[square.index()] = Some(piece);
         self.hash ^= KEYS.piece(piece, square);
+        if piece.kind == PieceType::Pawn {
+            self.pawn_hash ^= KEYS.piece(piece, square);
+        }
     }
 
     fn parse_board(&mut self, board: &str) -> Result<(), FenError> {
@@ -470,6 +477,23 @@ impl Position {
         hash
     }
 
+    /// Hash dos peões mantido de forma incremental.
+    pub fn pawn_hash(&self) -> u64 {
+        self.pawn_hash
+    }
+
+    /// Hash dos peões calculado do zero.
+    pub fn compute_pawn_hash(&self) -> u64 {
+        let mut hash = 0;
+        for color in Color::ALL {
+            let piece = Piece::new(color, PieceType::Pawn);
+            for square in self.pieces(color, PieceType::Pawn).squares() {
+                hash ^= KEYS.piece(piece, square);
+            }
+        }
+        hash
+    }
+
     /// Peças de qualquer cor que atacam `square`, com os deslizantes bloqueados por `occupied`.
     pub fn attackers_to(&self, square: Square, occupied: Bitboard) -> Bitboard {
         let diagonal =
@@ -619,6 +643,9 @@ impl Position {
         self.pieces[piece.kind.index()] ^= bb;
         self.colors[piece.color.index()] ^= bb;
         self.hash ^= KEYS.piece(piece, square);
+        if piece.kind == PieceType::Pawn {
+            self.pawn_hash ^= KEYS.piece(piece, square);
+        }
         piece
     }
 
@@ -917,6 +944,23 @@ mod tests {
     }
 
     #[test]
+    fn pawn_hash_depends_only_on_the_pawns() {
+        let a = Position::from_fen("4k3/pp6/8/8/8/8/5PPP/4K3 w - - 0 1").unwrap();
+        // Mesmos peões, outras peças e outro lado a jogar.
+        let b = Position::from_fen("r3k3/pp6/8/8/8/2N5/5PPP/4K2R b K - 0 1").unwrap();
+        assert_eq!(a.pawn_hash(), b.pawn_hash());
+        // Peão de outra cor na mesma casa, e peão em outra casa, mudam o hash.
+        let c = Position::from_fen("4k3/pP6/8/8/8/8/5PPP/4K3 w - - 0 1").unwrap();
+        let d = Position::from_fen("4k3/pp6/8/8/8/7P/5PP1/4K3 w - - 0 1").unwrap();
+        assert_ne!(a.pawn_hash(), c.pawn_hash());
+        assert_ne!(a.pawn_hash(), d.pawn_hash());
+        // Lance de peça não mexe no hash de peões; lance de peão mexe.
+        let pos = Position::startpos();
+        assert_eq!(play(&pos, "g1f3").pawn_hash(), pos.pawn_hash());
+        assert_ne!(play(&pos, "e2e4").pawn_hash(), pos.pawn_hash());
+    }
+
+    #[test]
     fn non_pawn_material_detection() {
         let pawns_only = Position::from_fen("4k3/pppp4/8/8/8/8/4PPPP/4K3 w - - 0 1").unwrap();
         assert!(!pawns_only.has_non_pawn_material(Color::White));
@@ -960,6 +1004,7 @@ mod tests {
                         pos.to_fen()
                     );
                     assert!(pos.is_consistent(), "{}", pos.to_fen());
+                    assert_eq!(pos.pawn_hash(), pos.compute_pawn_hash(), "{}", pos.to_fen());
                     let reparsed = Position::from_fen(&pos.to_fen()).unwrap();
                     assert_eq!(reparsed, pos, "FEN não reconstrói a posição");
                 }
