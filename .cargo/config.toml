@@ -1,0 +1,6 @@
+# Build para x86-64-v3 (AVX2, BMI1/2, FMA). Todas as máquinas-alvo têm: o Ryzen do dono, os
+# runners do GitHub, os servidores do TCEC e quase toda a CCRL. Ganho medido no mesmo bench (mesmos
+# nós): ~7% de nós/s com a avaliação à mão e ~23% com a NNUE.
+# Para CPU sem AVX2: RUSTFLAGS="-C target-cpu=x86-64" (a variável substitui esta configuração).
+[build]
+rustflags = ["-C", "target-cpu=x86-64-v3"]
