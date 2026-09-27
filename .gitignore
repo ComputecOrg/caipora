@@ -8,3 +8,5 @@
 /config.json
 # Cache do Python
 __pycache__/
+/checkpoints/
+/trainer/target/
