@@ -192,3 +192,35 @@ fn validate_prints_the_loss_of_a_network_on_positions() {
     std::fs::remove_file(&net).unwrap();
     std::fs::remove_file(&data).unwrap();
 }
+
+#[test]
+fn datagen_plays_with_a_network_given_on_the_command_line() {
+    let dir = std::env::temp_dir();
+    let id = std::process::id();
+    let net = dir.join(format!("caipora-datagen-net-{id}.nnue"));
+    let file = dir.join(format!("caipora-datagen-net-{id}.txt"));
+    let _ = std::fs::remove_file(&file);
+    // Rede zerada: avalia tudo em 0, então toda posição gravada tem pontuação 0.
+    std::fs::write(&net, vec![0u8; caipora::nnue::NETWORK_BYTES]).unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_caipora"))
+        .args([
+            "datagen",
+            "1",
+            file.to_str().unwrap(),
+            "5",
+            "300",
+            net.to_str().unwrap(),
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("não conseguiu rodar o datagen");
+    assert!(status.success());
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.lines().count() > 10, "{text}");
+    for line in text.lines() {
+        assert_eq!(line.split(" | ").nth(1), Some("0"), "{line}");
+    }
+    std::fs::remove_file(&net).unwrap();
+    std::fs::remove_file(&file).unwrap();
+}

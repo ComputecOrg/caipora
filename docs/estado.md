@@ -1,5 +1,31 @@
 # Estado do Caipora
 
+## v3 — 27/09/2026 (PRs #24 e #27: primeira NNUE)
+
+- **Força estimada: ~2815 CCRL Blitz** (+375 sobre a v2). Gauntlet a 8+0.08, 80 partidas por
+  adversário, branch com a rede embutida (08c3562):
+
+  | Adversário (CCRL Blitz) | Placar do Caipora | Diferença |
+  |---|---|---|
+  | Stash 19 (2473) | 86,9% | +328 |
+  | Stash 21 (2713) | 65,6% | +112 |
+  | Stash 25 (2933) | 33,8% | −117 |
+
+  Nenhuma derrota do Caipora por tempo; as 2 perdas por tempo foram do Stash.
+- **O que entrou:**
+  - a rede `caipora-g1`, embutida no executável (D14): (768 → 256)×2 → 1, 10 milhões de
+    posições de self-play próprio, alvo só na pontuação da busca (wdl 0);
+  - correction history (+47 Elo em nós fixos);
+  - a regra dos 60% do tempo (D13);
+  - build x86-64-v3 (D12).
+- **Bench:** 4214426 nós (com a rede), idêntico no Windows e no Linux (binário estático musl).
+- **Online:** o bot **caiporaBot** roda desde 27/09/2026 ~10:00 na VPS da Hetzner do dono (EUA,
+  88 ms até o Lichess), como serviço `caipora-bot` (`deploy/README.md`). Partidas casual, com
+  matchmaking contra bots de 2000 a 2600. Primeiras partidas com a rede:
+  - vitória contra o simpleEval (2103), com 97% de precisão na análise do Lichess;
+  - derrota contra o botchessbot (2482), assumida pelo servidor com 5 s no relógio durante a
+    troca de token.
+
 ## v2 — 27/09/2026 (PR #7, busca da fase 2)
 
 - **Força estimada: ~2440 CCRL Blitz** (+450 a +550 sobre a v1). Gauntlet a 8+0.08
@@ -43,18 +69,24 @@
 
 ## Fila de melhorias
 
-Mudança de busca entra com SPRT de nós fixos (100 mil nós, livro 8moves_v3, [0, 10]); mudança de
-tempo, com SPRT de relógio (8+0.08). Branches da fase 3 são empilhados (D10).
+- Mudança de busca: SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]), **com a rede nos dois
+  lados**.
+- Mudança de tempo: SPRT de relógio a 8+0.08.
+- Branches empilhados (D10).
 
-1. **Gestão de tempo** — PR #8. Não começar nova iteração depois de 60% do limite suave. Primeira
-   rodada (665 partidas) parou em +8 Elo, inconclusiva; SPRT de relógio em andamento (D9).
-2. **Busca, fase 3:**
-   - correction history pela estrutura de peões — PR #9, SPRT em andamento;
-   - continuation history (1 e 2 lances atrás) — PR #10, empilhado no #9;
-   - a seguir: capture history, TT na busca quiescente, history no LMR, extensões singulares.
-3. **Primeira NNUE** (D2, D11):
-   - gerador de dados `caipora datagen` — PR #11 (~190 posições/s por núcleo);
-   - treino no `bullet` com a GTX 1660 (CUDA no WSL);
-   - inferência na engine.
+1. **Busca, fase 3** (PRs em rascunho, na ordem):
+   - continuation history (#10): com a rede, +26 ± 30 em 240 partidas antes da pausa;
+   - TT em grupos de 4 (#15);
+   - TT na busca quiescente (#16);
+   - capture history (#20);
+   - LMR guiada pelo histórico (#21).
 
-   O Texel tuning da avaliação à mão saiu da fila: a NNUE vai substituí-la (D11).
+   Os SPRTs anteriores, feitos com a avaliação à mão, deixaram de valer.
+2. **Segunda geração de dados (g2)**, jogada e pontuada pela rede g1 (`caipora datagen` com
+   rede, PR #26), para treinar a rede g2.
+3. **Computação para as rajadas de testes e dados:** AWS spot (orçamento do dono: até
+   ~R$ 100/mês). Pendente: login do AWS CLI, alerta de orçamento e aumento da cota de spot.
+4. **Ferramentas:**
+   - `caipora validate`: perda de validação;
+   - `caipora-crash.log`: registro de quedas;
+   - `scripts/wsl_train.sh`: treino com um comando.

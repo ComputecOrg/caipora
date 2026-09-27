@@ -159,3 +159,24 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   ficar sem tempo online (o Lichess não compensa o lag do Brasil).
 - **Custo se estiver errada:** até ~9 Elo perdidos (limite inferior do intervalo), o que apareceria
   no próximo gauntlet; reverter é um commit.
+
+## D14 — 27/09/2026 — A primeira rede vai para dentro do executável
+
+- **Decisão:** a rede `net/caipora-g1.nnue` passa a ser embutida no executável e é a avaliação
+  padrão (`EvalFile` = `<embedded>`; `none` volta à avaliação à mão; um caminho carrega outra
+  rede). O `bench` usa a rede.
+- **Procedência:**
+  - dados: 10 milhões de posições do `caipora datagen`, binário 260c235, avaliação à mão,
+    5000 nós por lance, 8 lances aleatórios;
+  - treino: bullet c004ebf, (768 → 256)×2 → 1 SCReLU, 3 épocas, lr 0,001 com cosseno;
+  - **wdl 0**: o alvo é só a pontuação da busca.
+- **Por quê:**
+  - Com wdl 0,5 as redes inflavam a escala da avaliação. A perda na pontuação da busca foi 0,0084,
+    contra 0,0026 da avaliação à mão, e as redes perderam feio em jogo (−191).
+  - Com wdl 0 a rede prevê a pontuação melhor que a própria avaliação à mão: 0,00174 contra
+    0,00257, em 100 mil posições de partidas fora do treino.
+  - Em jogo, venceu a avaliação à mão por +220 ± 67 Elo em 100 partidas a 8+0.08 (68 vitórias,
+    20 empates, 12 derrotas). É uma diferença grande o bastante para não esperar o SPRT fechar.
+- **Custo se estiver errada:** o bench e toda medição passam a depender de um arquivo binário
+  versionado (394 KB). Se a rede tiver um defeito que só aparece em jogo longo, perde-se força até
+  a próxima; voltar é um commit (`EvalFile none` resolve na hora).

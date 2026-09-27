@@ -783,7 +783,11 @@ impl SearchState<'_> {
         let score = match self.network {
             Some(net) => {
                 let score = net.output(&self.accumulators[ply], pos.side_to_move());
-                debug_assert_eq!(score, net.evaluate(pos), "{}", pos.to_fen());
+                // Em debug, confere o incremental contra o cálculo do zero, por amostragem para o
+                // build de debug seguir jogável (o CI joga partidas com relógio).
+                if cfg!(debug_assertions) && self.nodes.is_multiple_of(64) {
+                    assert_eq!(score, net.evaluate(pos), "{}", pos.to_fen());
+                }
                 score
             }
             None => evaluate(pos),

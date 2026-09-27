@@ -64,7 +64,11 @@ impl Engine {
             history: Vec::new(),
             chess960: false,
             move_overhead: Duration::from_millis(DEFAULT_MOVE_OVERHEAD_MS),
-            searcher: Some(Searcher::new(DEFAULT_HASH_MB)),
+            searcher: Some({
+                let mut searcher = Searcher::new(DEFAULT_HASH_MB);
+                searcher.set_network(Some(crate::nnue::embedded()));
+                searcher
+            }),
             search_thread: None,
             stop: Arc::new(AtomicBool::new(false)),
             out,
@@ -154,7 +158,7 @@ impl Engine {
             ),
             "option name UCI_Chess960 type check default false".to_string(),
             "option name Clear Hash type button".to_string(),
-            "option name EvalFile type string default <empty>".to_string(),
+            "option name EvalFile type string default <embedded>".to_string(),
             "uciok".to_string(),
         ];
         for line in lines {
@@ -193,13 +197,22 @@ impl Engine {
         }
     }
 
-    /// `EvalFile`: carrega a rede do arquivo; vazio (ou `<empty>`) volta à avaliação à mão. Em
-    /// caso de erro, avisa e mantém a avaliação que estava.
+    /// `EvalFile`: `<embedded>` (o padrão) usa a rede do executável; `none` (ou vazio) volta à
+    /// avaliação à mão; qualquer outro valor é o caminho de uma rede. Em caso de erro, avisa e
+    /// mantém a avaliação que estava.
     fn load_network(&mut self, path: &str) {
         self.finish_search();
-        if path.is_empty() || path == "<empty>" {
-            self.searcher_mut().set_network(None);
-            return;
+        match path {
+            "<embedded>" => {
+                self.searcher_mut()
+                    .set_network(Some(crate::nnue::embedded()));
+                return;
+            }
+            "" | "none" | "<empty>" => {
+                self.searcher_mut().set_network(None);
+                return;
+            }
+            _ => {}
         }
         let loaded = std::fs::read(path)
             .map_err(|e| e.to_string())
@@ -496,7 +509,7 @@ mod tests {
             "option name Move Overhead type spin default 10 min 0 max 5000",
             "option name UCI_Chess960 type check default false",
             "option name Clear Hash type button",
-            "option name EvalFile type string default <empty>",
+            "option name EvalFile type string default <embedded>",
         ] {
             assert!(text.contains(option), "falta {option}");
         }
@@ -667,6 +680,32 @@ mod tests {
             "{text}"
         );
         std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn the_embedded_network_is_the_default_and_none_turns_it_off() {
+        let (mut default, buffer) = engine();
+        send(&mut default, &["eval"]);
+        assert!(
+            buffer.text().contains("(network, side to move)"),
+            "{}",
+            buffer.text()
+        );
+        let (mut off, buffer) = engine();
+        send(&mut off, &["setoption name EvalFile value none", "eval"]);
+        let text = buffer.text();
+        assert!(text.contains("info string eval"), "{text}");
+        assert!(!text.contains("(network"), "{text}");
+        // E volta à embutida.
+        send(
+            &mut off,
+            &["setoption name EvalFile value <embedded>", "eval"],
+        );
+        assert!(
+            buffer.text().contains("(network, side to move)"),
+            "{}",
+            buffer.text()
+        );
     }
 
     #[test]

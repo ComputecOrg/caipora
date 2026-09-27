@@ -20,7 +20,9 @@ fn main() {
         Some("datagen") => {
             if let Err(message) = run_datagen(&args[1..]) {
                 eprintln!("datagen: {message}");
-                eprintln!("uso: caipora datagen <partidas> <arquivo> [semente] [nós por lance]");
+                eprintln!(
+                    "uso: caipora datagen <partidas> <arquivo> [semente] [nós por lance] [rede]"
+                );
                 std::process::exit(1);
             }
         }
@@ -35,8 +37,8 @@ fn main() {
     }
 }
 
-/// `caipora datagen <partidas> <arquivo> [semente] [nós]`: acrescenta as posições ao arquivo e
-/// mostra o progresso no stderr.
+/// `caipora datagen <partidas> <arquivo> [semente] [nós] [rede]`: acrescenta as posições ao
+/// arquivo e mostra o progresso no stderr. Com a rede, as partidas são jogadas e pontuadas por ela.
 fn run_datagen(args: &[String]) -> Result<(), String> {
     let games = args
         .first()
@@ -48,11 +50,20 @@ fn run_datagen(args: &[String]) -> Result<(), String> {
             text.parse().map_err(|_| format!("{text} não é número"))
         })
     };
+    let network = match args.get(4) {
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            let net = Network::from_bytes(&bytes).map_err(|e| format!("{path}: {e}"))?;
+            Some(std::sync::Arc::new(net))
+        }
+        None => None,
+    };
     let config = datagen::Config {
         games,
         seed: number(2, 1)?,
         nodes: number(3, 5_000)?,
         random_plies: 8,
+        network,
     };
     let file = OpenOptions::new()
         .create(true)
