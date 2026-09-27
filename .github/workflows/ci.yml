@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # O bench esperado vem da mensagem de commit mais recente que o contém.
+          fetch-depth: 100
       # O toolchain e os componentes vêm do rust-toolchain.toml.
       - name: Format
         run: cargo fmt --check
@@ -21,3 +24,27 @@ jobs:
         run: cargo test
       - name: Perft suites (standard + Chess960)
         run: cargo test --release --test perft -- --ignored
+      - name: Bench signature
+        run: |
+          expected=$(git log --format=%B -n 100 | grep -oE 'Bench: [0-9]+' | head -1 | grep -oE '[0-9]+')
+          actual=$(cargo run --release -q -- bench | grep -oE 'Bench: [0-9]+' | grep -oE '[0-9]+')
+          echo "bench esperado: ${expected:-nenhum}  obtido: $actual"
+          test -n "$expected" && test "$expected" = "$actual"
+      - name: Smoke games (debug build)
+        run: |
+          cargo build -q
+          curl -sSL https://github.com/Disservin/fastchess/releases/download/v1.8.2-alpha/fastchess-linux-x86-64.tar -o fastchess.tar
+          mkdir -p fastchess && tar -xf fastchess.tar -C fastchess
+          curl -sSL https://raw.githubusercontent.com/AndyGrant/openbench-books/master/8moves_v3.epd.zip -o book.zip
+          unzip -o -q book.zip
+          fc=$(find fastchess -type f -name fastchess | head -1)
+          chmod +x "$fc"
+          "$fc" -engine cmd=target/debug/caipora name=a -engine cmd=target/debug/caipora name=b \
+            -each tc=8+0.08 option.Hash=16 -openings file=8moves_v3.epd format=epd order=random \
+            -rounds 8 -games 2 -repeat -concurrency 2 -pgnout file=smoke.pgn 2>&1 | tee smoke.log
+          grep -h '^\[Termination' smoke.pgn | sort | uniq -c
+          test "$(grep -c '^\[Result' smoke.pgn)" -eq 16
+          if grep -hv '^\[Termination "normal"\]' smoke.pgn | grep -q '^\[Termination'; then
+            echo "partida terminou de forma anormal"; exit 1
+          fi
+          if grep -Eiq 'illegal|disconnect|stall|crash' smoke.log; then exit 1; fi

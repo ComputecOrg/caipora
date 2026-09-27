@@ -3,3 +3,6 @@
 *.log
 /datagen/
 /nets/
+/tools/
+# Autosave do fastchess (retomada de torneio)
+/config.json
