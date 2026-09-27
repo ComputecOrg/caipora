@@ -95,20 +95,46 @@ case "$cmd" in
     ssh_ "$ip" 'mkdir -p ~/caipora/data'
     scp -q -i "$KEY" -o UserKnownHostsFile="$KNOWN" "$bin" "ubuntu@$ip:caipora/caipora"
     scp -q -i "$KEY" -o UserKnownHostsFile="$KNOWN" "$net" "ubuntu@$ip:caipora/net.nnue"
-    ssh_ "$ip" "cd ~/caipora && chmod +x caipora && n=\$(nproc) && for i in \$(seq 0 \$((n - 1))); do
+    # O datagen para no máximo 30 min antes do desligamento agendado da máquina: o desligamento
+    # bloqueia logins 5 min antes, e a coleta final precisa de folga (27/09/2026: uma coleta caiu
+    # nessa janela e a rodada se perdeu).
+    ssh_ "$ip" "cd ~/caipora && chmod +x caipora && n=\$(nproc)
+      secs=\$(( ${hours%.*} * 3600 ))
+      case '$hours' in *.*) secs=\$(awk 'BEGIN { printf \"%d\", $hours * 3600 }') ;; esac
+      if [ -f /run/systemd/shutdown/scheduled ]; then
+        down=\$(( \$(sed -n 's/^USEC=//p' /run/systemd/shutdown/scheduled) / 1000000 ))
+        limit=\$(( down - \$(date +%s) - 1800 ))
+        [ \$limit -lt \$secs ] && secs=\$limit
+      fi
+      [ \$secs -gt 0 ] || { echo 'sem tempo antes do desligamento'; exit 1; }
+      for i in \$(seq 0 \$((n - 1))); do
         s=\$(( $seed + i ))
-        nohup timeout ${hours}h ./caipora datagen 100000000 data/$prefix-\$s.txt \$s 5000 net.nnue \
-          > data/$prefix-\$s.log 2>&1 &
-      done; echo \"\$n processos de datagen, sementes $seed a \$(( $seed + n - 1 ))\""
+        nohup timeout \${secs}s ./caipora datagen 100000000 data/$prefix-\$s.txt \$s 5000 net.nnue \
+          > data/$prefix-\$s.log 2>&1 < /dev/null &
+      done
+      echo \"\$n processos de datagen, sementes $seed a \$(( $seed + n - 1 )), param em \$(( secs / 60 )) min\""
     ;;
   fetch)
     id=$2; prefix=$3
     ip=$(ip_of "$id")
     mkdir -p datagen
-    ssh_ "$ip" "cd ~/caipora/data && for f in $prefix-*.txt; do head -n \$(wc -l < \$f) \$f; done | gzip -1" \
-      > "datagen/$prefix-aws-$id.txt.gz"
-    ls -la "datagen/$prefix-aws-$id.txt.gz"
-    echo "posições: $(gzip -dc "datagen/$prefix-aws-$id.txt.gz" | wc -l)"
+    out="datagen/$prefix-aws-$id.txt.gz"
+    # Baixa num temporário e só troca o arquivo anterior se o novo estiver íntegro e não for menor:
+    # uma coleta que falha nunca apaga a anterior (27/09/2026: apagou, e a rodada se perdeu).
+    if ! ssh_ "$ip" "cd ~/caipora/data && for f in $prefix-*.txt; do head -n \$(wc -l < \$f) \$f; done | gzip -1" \
+        > "$out.tmp" || ! gzip -t "$out.tmp" 2>/dev/null || [ ! -s "$out.tmp" ]; then
+      rm -f "$out.tmp"
+      echo "coleta falhou; mantido o arquivo anterior ($( [ -f "$out" ] && stat -c %s "$out" || echo 0 ) bytes)" >&2
+      exit 1
+    fi
+    if [ -f "$out" ] && [ "$(stat -c %s "$out.tmp")" -lt "$(stat -c %s "$out")" ]; then
+      rm -f "$out.tmp"
+      echo "coleta menor que a anterior; mantida a anterior" >&2
+      exit 1
+    fi
+    mv -f "$out.tmp" "$out"
+    ls -la "$out"
+    echo "posições: $(gzip -dc "$out" | wc -l)"
     ;;
   sprt)
     id=$2; new=$3; base=$4; tag=$5; conc=$6; seed=${7:-1}
