@@ -1,9 +1,12 @@
 pub mod attacks;
 pub mod bench;
 pub mod bitboard;
+pub mod crash;
+pub mod datagen;
 pub mod eval;
 pub mod movegen;
 pub mod moves;
+pub mod nnue;
 pub mod position;
 pub mod search;
 pub mod see;

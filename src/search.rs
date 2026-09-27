@@ -1,16 +1,17 @@
 //! Busca da v1: negamax alpha-beta fail-soft com aprofundamento iterativo, janelas de aspiração,
 //! PVS, extensão de xeque, busca quiescente, tabela de transposição e ordenação TT → MVV-LVA.
 
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::eval::evaluate;
 use crate::movegen::{generate_legal, generate_pseudo_legal};
 use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
+use crate::nnue::{Accumulators, Network};
 use crate::position::Position;
 use crate::see::see;
-use crate::timeman::Limits;
+use crate::timeman::{Limits, should_start_iteration};
 use crate::tt::{Bound, TranspositionTable};
 use crate::types::{Color, Piece, PieceType, Square};
 
@@ -247,6 +248,8 @@ pub struct Searcher {
     history: Box<History>,
     continuation: Box<ContinuationHistory>,
     correction: Box<CorrectionHistory>,
+    /// Rede neural da avaliação; sem ela, a avaliação à mão.
+    network: Option<Arc<Network>>,
 }
 
 impl Searcher {
@@ -256,7 +259,18 @@ impl Searcher {
             history: History::new(),
             continuation: ContinuationHistory::new(),
             correction: CorrectionHistory::new(),
+            network: None,
         }
+    }
+
+    /// Troca a avaliação: `Some` passa a usar a rede; `None` volta à avaliação à mão.
+    pub fn set_network(&mut self, network: Option<Arc<Network>>) {
+        self.network = network;
+    }
+
+    /// A rede em uso, se houver.
+    pub fn network(&self) -> Option<&Network> {
+        self.network.as_deref()
     }
 
     pub fn resize(&mut self, hash_megabytes: usize) {
@@ -295,7 +309,12 @@ impl Searcher {
         let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
         hashes.extend_from_slice(history);
         hashes.push(root.hash());
+        let network = self.network.as_deref();
         let mut state = SearchState {
+            accumulators: network.map_or_else(Vec::new, |net| {
+                vec![Accumulators::new(net, root); MAX_PLY + 2]
+            }),
+            network,
             tt: &mut self.tt,
             history: &mut self.history,
             continuation: &mut self.continuation,
@@ -350,10 +369,9 @@ impl Searcher {
                 hashfull: state.tt.hashfull(),
                 pv,
             });
-            let soft_limit_reached = limits
-                .soft_time
-                .is_some_and(|soft| state.start.elapsed() >= soft);
-            if soft_limit_reached || state.stop.load(Ordering::Relaxed) {
+            if !should_start_iteration(state.start.elapsed(), limits)
+                || state.stop.load(Ordering::Relaxed)
+            {
                 break;
             }
         }
@@ -389,6 +407,9 @@ struct SearchState<'a> {
     after_null: Vec<bool>,
     /// `moved[ply]`: lance jogado nesse nível no caminho atual (`None` para o lance nulo).
     moved: Vec<Option<PieceTo>>,
+    network: Option<&'a Network>,
+    /// `accumulators[ply]`: camada oculta da rede na posição desse nível (vazio sem rede).
+    accumulators: Vec<Accumulators>,
 }
 
 impl SearchState<'_> {
@@ -473,7 +494,7 @@ impl SearchState<'_> {
             return self.quiescence(pos, alpha, beta, ply);
         }
         if ply >= MAX_PLY - 1 {
-            return evaluate(pos);
+            return self.raw_eval(pos, ply);
         }
         self.nodes += 1;
         self.seldepth = self.seldepth.max(ply);
@@ -498,7 +519,11 @@ impl SearchState<'_> {
 
         let us = pos.side_to_move();
         // Avaliação estática, já corrigida; em xeque não existe (a posição não é "parada").
-        let raw_eval = if in_check { -INFINITY } else { evaluate(pos) };
+        let raw_eval = if in_check {
+            -INFINITY
+        } else {
+            self.raw_eval(pos, ply)
+        };
         let static_eval = if in_check {
             -INFINITY
         } else {
@@ -529,6 +554,7 @@ impl SearchState<'_> {
                 let null = pos.make_null_move();
                 self.hashes.push(null.hash());
                 self.moved[ply] = None;
+                self.push_null(ply);
                 self.after_null[ply + 1] = true;
                 let score = -self.negamax(
                     &null,
@@ -605,6 +631,7 @@ impl SearchState<'_> {
             self.moved[ply] = pos
                 .piece_at(mv.from())
                 .map(|piece| PieceTo { piece, to: mv.to() });
+            self.push_move(pos, mv, ply);
             let score = if legal == 1 {
                 -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
             } else {
@@ -695,13 +722,13 @@ impl SearchState<'_> {
         self.nodes += 1;
         self.seldepth = self.seldepth.max(ply);
         if ply >= MAX_PLY - 1 {
-            return evaluate(pos);
+            return self.raw_eval(pos, ply);
         }
         let in_check = pos.in_check();
         let mut best_score = if in_check {
             -INFINITY
         } else {
-            let stand_pat = self.corrected_eval(pos, evaluate(pos));
+            let stand_pat = self.corrected_eval(pos, self.raw_eval(pos, ply));
             if stand_pat >= beta {
                 return stand_pat;
             }
@@ -729,6 +756,7 @@ impl SearchState<'_> {
                 continue;
             }
             legal += 1;
+            self.push_move(pos, mv, ply);
             let score = -self.quiescence(&next, -beta, -alpha, ply + 1);
             if self.stopped {
                 return 0;
@@ -747,6 +775,34 @@ impl SearchState<'_> {
             return -MATE + ply as i32;
         }
         best_score
+    }
+
+    /// Avaliação estática sem correção, do ponto de vista do lado a jogar: a rede, quando há uma,
+    /// ou a avaliação à mão.
+    fn raw_eval(&self, pos: &Position, ply: usize) -> i32 {
+        let score = match self.network {
+            Some(net) => {
+                let score = net.output(&self.accumulators[ply], pos.side_to_move());
+                debug_assert_eq!(score, net.evaluate(pos), "{}", pos.to_fen());
+                score
+            }
+            None => evaluate(pos),
+        };
+        score.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
+    /// Prepara a camada oculta do nível seguinte para o lance `mv`.
+    fn push_move(&mut self, pos: &Position, mv: Move, ply: usize) {
+        if let Some(net) = self.network {
+            self.accumulators[ply + 1] = self.accumulators[ply].after_move(net, pos, mv);
+        }
+    }
+
+    /// O lance nulo não mexe em peça: a camada oculta é a mesma.
+    fn push_null(&mut self, ply: usize) {
+        if self.network.is_some() {
+            self.accumulators[ply + 1] = self.accumulators[ply];
+        }
     }
 
     /// Avaliação `raw` somada à correção da estrutura de peões, longe das pontuações de mate.
@@ -839,7 +895,7 @@ impl SearchState<'_> {
 }
 
 /// Sem peões, torres ou damas e com no máximo uma peça menor: ninguém consegue dar mate.
-fn insufficient_material(pos: &Position) -> bool {
+pub(crate) fn insufficient_material(pos: &Position) -> bool {
     use crate::types::Color::{Black, White};
     let heavy_or_pawn = [PieceType::Pawn, PieceType::Rook, PieceType::Queen]
         .into_iter()
@@ -865,7 +921,7 @@ fn captured_kind(pos: &Position, mv: Move) -> Option<PieceType> {
 }
 
 /// Capturas e promoções a dama: os lances da busca quiescente.
-fn is_tactical(pos: &Position, mv: Move) -> bool {
+pub(crate) fn is_tactical(pos: &Position, mv: Move) -> bool {
     captured_kind(pos, mv).is_some() || mv.kind() == MoveKind::Promotion(PieceType::Queen)
 }
 
@@ -1287,6 +1343,43 @@ mod tests {
         assert!(c6 > f6, "{c6} {f6}");
         let (c6, f6) = order([None, None]);
         assert!(f6 > c6, "{c6} {f6}");
+    }
+
+    #[test]
+    fn with_a_network_the_search_evaluates_with_it() {
+        // Em debug, cada avaliação incremental é conferida contra a avaliação do zero.
+        let fens = [
+            crate::position::STARTPOS_FEN,
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+            "4k3/1P6/8/8/8/8/6p1/4K3 w - - 0 1",
+        ];
+        // Limite de nós: com uma rede aleatória a busca quiescente não "acalma" e a profundidade
+        // não serve de régua de custo.
+        let nodes = Limits {
+            nodes: Some(5_000),
+            ..Limits::default()
+        };
+        for fen in fens {
+            let pos = Position::from_fen(fen).unwrap();
+            let search = |network: Option<u64>| {
+                let mut searcher = Searcher::new(16);
+                searcher
+                    .set_network(network.map(|seed| Arc::new(crate::nnue::random_network(seed))));
+                searcher.search(&pos, &[], &nodes, &AtomicBool::new(false), &mut |_| {})
+            };
+            let with_net = search(Some(5));
+            assert!(
+                generate_legal(&pos).contains(with_net.best_move.unwrap()),
+                "{fen}"
+            );
+            // Outra rede (ou nenhuma) avalia diferente: a rede está mesmo sendo usada.
+            let (other, none) = (search(Some(6)), search(None));
+            assert!(
+                with_net.score != other.score || with_net.score != none.score,
+                "{fen}"
+            );
+        }
     }
 
     #[test]
