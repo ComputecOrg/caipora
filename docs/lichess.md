@@ -68,6 +68,22 @@ em 3+2 ou 5+3.
 Coloque na bio da conta algo como: *"Caipora, UCI chess engine in Rust written by Claude Code
 under the direction of Matheus de Carvalho Jesus."*
 
+## Patch local no lichess-bot (partida repetida)
+
+O Lichess às vezes manda o evento `gameStart` duas vezes para a mesma partida. O lichess-bot
+2026.8.9.2 (e a versão oficial, em 27/09/2026) abre então dois processos para ela. O segundo
+recebe HTTP 429 no stream da partida e pode derrubar o jogo: foi o que aconteceu em
+<https://lichess.org/m7pWoX1F>, abandonada.
+
+O patch `scripts/lichess-bot-duplicate-gamestart.patch` guarda os ids das partidas já
+iniciadas, ignora o `gameStart` repetido e libera o id quando a partida acaba. Reaplicar depois de
+cada atualização do lichess-bot:
+
+```powershell
+cd C:\Projetos\lichess-bot
+git apply C:\Projetos\ChessAI\scripts\lichess-bot-duplicate-gamestart.patch
+```
+
 ## Rodar 24 horas
 
 - No PC: como serviço do Windows com o NSSM (o WSL não se mantém vivo sozinho). Desligue a

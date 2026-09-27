@@ -1,0 +1,31 @@
+diff --git a/lib/lichess_bot.py b/lib/lichess_bot.py
+index 63ab211..c8d7561 100644
+--- a/lib/lichess_bot.py
++++ b/lib/lichess_bot.py
+@@ -387,6 +387,7 @@ def lichess_bot_main(li: lichess.Lichess,
+ 
+             if event["type"] == "local_game_done":
+                 active_games.pop(event["game"]["id"], None)
++                started_games.discard(event["game"]["id"])
+                 matchmaker.game_done()
+                 log_proc_count("Freed", active_games)
+                 one_game_completed = True
+@@ -562,9 +563,18 @@ def game_is_active(li: lichess.Lichess, game_id: str) -> bool:
+     return game_id in (ongoing_game["gameId"] for ongoing_game in active_games)
+ 
+ 
++# Caipora local patch: Lichess can send gameStart twice for the same game; a second play_game
++# then fails on the game stream (HTTP 429) and can take the game down with it.
++started_games: set[str] = set()
++
++
+ def start_game_thread(active_games: dict[str, str], game_id: str, opponent_name: str,
+                       play_game_args: PlayGameArgsType, pool: POOL_TYPE) -> None:
+     """Start a game thread."""
++    if game_id in started_games:
++        logger.info(f"--- Ignoring repeated gameStart for {game_id}")
++        return
++    started_games.add(game_id)
+     active_games[game_id] = opponent_name
+     log_proc_count("Used", active_games)
+     play_game_args["game_id"] = game_id
