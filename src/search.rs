@@ -261,6 +261,32 @@ fn correction_applies(bound: Bound, best_score: i32, static_eval: i32) -> bool {
     }
 }
 
+/// Cada tantos pontos de histórico (simples + continuações) valem um nível a menos (ou a mais) de
+/// redução.
+const LMR_HISTORY_DIVISOR: i32 = 8_192;
+
+/// Redução de um lance quieto tardio: a da tabela, um nível a menos em nó PV e para killer e, fora
+/// os killers (cuja pontuação de ordenação não é histórico), o histórico empurrando para os dois
+/// lados.
+fn late_move_reduction(
+    depth: i32,
+    move_number: usize,
+    pv_node: bool,
+    killer: bool,
+    history: i32,
+) -> i32 {
+    let mut r = lmr_reduction(depth, move_number);
+    if pv_node {
+        r -= 1;
+    }
+    if killer {
+        r -= 1;
+    } else {
+        r -= history / LMR_HISTORY_DIVISOR;
+    }
+    r
+}
+
 /// Redução base do LMR para a profundidade e o número do lance (1 = primeiro lance legal).
 fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
     LMR_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
@@ -622,6 +648,7 @@ impl SearchState<'_> {
         let mut captures_tried = MoveList::new();
         for index in 0..moves.len() {
             let mv = pick_next(&mut moves, &mut scores, index);
+            let order_score = scores[index];
             let next = pos.make_move(mv);
             if next.is_attacked(next.king_square(us), next.side_to_move()) {
                 continue;
@@ -666,14 +693,9 @@ impl SearchState<'_> {
                 let late = legal > if pv_node { 3 } else { 2 };
                 let reduction =
                     if depth >= LMR_MIN_DEPTH && late && quiet && !in_check && !next.in_check() {
-                        let mut r = lmr_reduction(depth, legal);
-                        if pv_node {
-                            r -= 1;
-                        }
-                        if killers.contains(&Some(mv)) {
-                            r -= 1;
-                        }
-                        r.clamp(0, new_depth - 1)
+                        let killer = killers.contains(&Some(mv));
+                        late_move_reduction(depth, legal, pv_node, killer, order_score)
+                            .clamp(0, new_depth - 1)
                     } else {
                         0
                     };
@@ -1478,6 +1500,18 @@ mod tests {
         }
         let (nxn, nxp, rxp) = order(&captures);
         assert!(nxn > rxp && rxp > nxp, "{nxn} {nxp} {rxp}");
+    }
+
+    #[test]
+    fn history_moves_the_late_move_reduction() {
+        let base = late_move_reduction(10, 20, false, false, 0);
+        assert!(base >= 2, "{base}");
+        // Histórico bom reduz menos; ruim, mais.
+        assert!(late_move_reduction(10, 20, false, false, 16_000) < base);
+        assert!(late_move_reduction(10, 20, false, false, -16_000) > base);
+        // Nó PV e killer reduzem um a menos; a pontuação de ordenação do killer não é histórico.
+        assert_eq!(late_move_reduction(10, 20, true, false, 0), base - 1);
+        assert_eq!(late_move_reduction(10, 20, false, true, 80_000), base - 1);
     }
 
     #[test]
