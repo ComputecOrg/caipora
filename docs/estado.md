@@ -1,5 +1,27 @@
 # Estado do Caipora
 
+## v3.2 — 27/09/2026 (PRs #38, #39 e #45: Lazy SMP e rede g2)
+
+- **Força estimada: ~3108 ± 24 CCRL Blitz** com 1 thread (+~230 sobre a v3.1). Gauntlet na AWS
+  a 8+0.08, Hash 16, 200 partidas por adversário. A v3.1 (rede g1) jogou o mesmo gauntlet como
+  régua e saiu em 2850 ± 30, dentro do erro dos ~2879 medidos em casa:
+
+  | Adversário (CCRL Blitz) | v3.2 (g2) | v3.1 (g1), mesmo gauntlet |
+  |---|---|---|
+  | Stash 25 (2933) | 76,5% | 40,5% |
+  | Stash 30 (3153) | 42,2% | 15,5% |
+  | Stash 33 (3273) | 26,0% | 5,0% |
+
+  1400 partidas, todas com terminação normal (`tools/aws-sprt/gauntlet-g2/`).
+- **O que entrou:**
+  - rede g2 (D16), 159 milhões de posições jogadas pela g1: +338 ± 53 em nós fixos e
+    +331 ± 57 a 8+0.08, contra a g1;
+  - Lazy SMP (opção `Threads`, até 256): 2 threads contra 1, +121 ± 31 a 8+0.08 em 275
+    partidas;
+  - TT sem trava (entradas atômicas), pré-requisito do Lazy SMP.
+- **Bench:** 2893409.
+- **Bot:** 2 threads (a VPS tem 2 vCPUs), rated, contra bots de 2000 a 2600.
+
 ## v3.1 — 27/09/2026 (PRs #10, #15, #16: busca da fase 3 com a rede)
 
 - **Força estimada: ~2879 CCRL Blitz** (+64 sobre a v3). Gauntlet a 8+0.08, 80 partidas por
@@ -21,7 +43,7 @@
   - LMR por histórico: medida contra a capture history, fica para reteste.
 - **Bench:** 3306025. Roda no bot do servidor desde 27/09/2026 ~14:15.
 - **Rodada de dados g2 perdida.** Os ~138 milhões de posições se perderam por falha na coleta. A
-  coleta foi corrigida (PR #34), e os dados precisam ser gerados de novo.
+  coleta foi corrigida (PR #34) e a rodada refeita deu a rede da v3.2.
 
 ## v3 — 27/09/2026 (PRs #24 e #27: primeira NNUE)
 
@@ -97,19 +119,14 @@
 - Mudança de tempo: SPRT de relógio a 8+0.08.
 - Branches empilhados (D10).
 
-1. **Busca, fase 3** (PRs em rascunho, na ordem):
-   - continuation history (#10): com a rede, +26 ± 30 em 240 partidas antes da pausa;
-   - TT em grupos de 4 (#15);
-   - TT na busca quiescente (#16);
-   - capture history (#20);
-   - LMR guiada pelo histórico (#21).
-
-   Os SPRTs anteriores, feitos com a avaliação à mão, deixaram de valer.
-2. **Segunda geração de dados (g2)**, jogada e pontuada pela rede g1 (`caipora datagen` com
-   rede, PR #26), para treinar a rede g2.
-3. **Computação para as rajadas de testes e dados:** AWS spot (orçamento do dono: até
-   ~R$ 100/mês). Pendente: login do AWS CLI, alerta de orçamento e aumento da cota de spot.
-4. **Ferramentas:**
+1. **Ponder** (pensar no tempo do adversário): o bot joga uma partida por vez e deixa os 2
+   núcleos parados enquanto o adversário pensa; a engine ainda ignora `go ponder`.
+2. **Terceira geração de dados (g3)**, jogada pela g2; com mais dados, testar uma camada oculta
+   maior que 256.
+3. **LMR guiada pelo histórico** (branch `feat/history-lmr`): retestar em cima da main.
+4. **4 threads no bot:** medir 4 contra 2 na AWS antes de pensar em VPS maior (nos EUA a
+   Hetzner ficou cara em jun/2026; na Europa um CPX32 cabe no orçamento e fica perto do Lichess).
+5. **Ferramentas:**
    - `caipora validate`: perda de validação;
    - `caipora-crash.log`: registro de quedas;
    - `scripts/wsl_train.sh`: treino com um comando.
