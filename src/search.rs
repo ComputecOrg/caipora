@@ -23,6 +23,17 @@ const RFP_MAX_DEPTH: i32 = 8;
 const RFP_MARGIN: i32 = 80;
 const NMP_MIN_DEPTH: i32 = 3;
 const LMR_MIN_DEPTH: i32 = 3;
+const IIR_MIN_DEPTH: i32 = 4;
+const LMP_MAX_DEPTH: i32 = 8;
+const FUTILITY_MAX_DEPTH: i32 = 6;
+const FUTILITY_BASE: i32 = 100;
+const FUTILITY_MARGIN: i32 = 100;
+
+/// Quantos lances um nó de profundidade `depth` busca antes de o LMP podar os quietos restantes.
+fn lmp_threshold(depth: i32, improving: bool) -> usize {
+    let base = (3 + depth * depth) as usize;
+    if improving { base } else { base / 2 }
+}
 
 /// Informação de uma iteração completa, para a linha `info` do UCI.
 #[derive(Clone, Debug)]
@@ -144,6 +155,7 @@ impl Searcher {
             tt: &mut self.tt,
             history: &mut self.history,
             killers: vec![[None, None]; MAX_PLY + 2],
+            evals: vec![-INFINITY; MAX_PLY + 2],
             stop,
             limits,
             start: Instant::now(),
@@ -209,6 +221,8 @@ struct SearchState<'a> {
     history: &'a mut History,
     /// Até dois lances quietos que causaram corte em cada nível.
     killers: Vec<[Option<Move>; 2]>,
+    /// Avaliação estática de cada nível do caminho atual (`-INFINITY` quando em xeque).
+    evals: Vec<i32>,
     stop: &'a AtomicBool,
     limits: &'a Limits,
     start: Instant,
@@ -332,8 +346,18 @@ impl SearchState<'_> {
         }
 
         let us = pos.side_to_move();
+        // Avaliação estática; em xeque não existe (a posição não é "parada").
+        let static_eval = if in_check { -INFINITY } else { evaluate(pos) };
+        self.evals[ply] = static_eval;
+        // A posição melhorou em relação à nossa vez anterior? Se sim, podar é mais seguro.
+        let improving = !in_check && ply >= 2 && static_eval > self.evals[ply - 2];
+
+        // Sem lance da TT a ordenação é ruim; uma busca um pouco mais rasa sai mais barata.
+        if depth >= IIR_MIN_DEPTH && ply > 0 && tt_move.is_none() {
+            depth -= 1;
+        }
+
         if !pv_node && !in_check && ply > 0 && beta.abs() < MATE_BOUND {
-            let static_eval = evaluate(pos);
             // Reverse futility: tão acima de beta que nem uma perda de `margem` por nível muda nada.
             if depth <= RFP_MAX_DEPTH && static_eval - RFP_MARGIN * depth >= beta {
                 return static_eval;
@@ -389,6 +413,21 @@ impl SearchState<'_> {
             legal += 1;
             let quiet = !is_tactical(pos, mv);
             let new_depth = depth - 1;
+            let prunable =
+                !pv_node && !in_check && quiet && best_score > -MATE_BOUND && !next.in_check();
+            if prunable {
+                // Late move pruning: em nível raso, depois de muitos quietos, o resto quase nunca
+                // presta.
+                if depth <= LMP_MAX_DEPTH && legal > lmp_threshold(depth, improving) {
+                    continue;
+                }
+                // Futility: nem com uma boa folga a posição chega a alpha com um lance quieto.
+                if depth <= FUTILITY_MAX_DEPTH
+                    && static_eval + FUTILITY_BASE + FUTILITY_MARGIN * depth <= alpha
+                {
+                    continue;
+                }
+            }
             self.hashes.push(next.hash());
             let score = if legal == 1 {
                 -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
