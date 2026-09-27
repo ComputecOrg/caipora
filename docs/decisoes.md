@@ -98,3 +98,85 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** o CI em repositório privado consome a cota do plano Free
   (2.000 min/mês; runners Windows contam em dobro). Engine fechada e feita com IA tende a atrair
   mais desconfiança da comunidade, e ao abrir o repositório todo o histórico fica visível.
+
+## D9 — 27/09/2026 — Teste de tempo com relógio, dividindo a máquina
+
+- **Decisão:** o SPRT da regra dos 60% (PR #8) roda a 8+0.08 com `-concurrency 3`, ao mesmo
+  tempo que SPRTs de nós fixos com `-concurrency 2` e o bot do Lichess (1 núcleo quando joga).
+  Limites [0, 10]. Se passar de ~8000 partidas sem decisão, a regra entra só se o placar não for
+  negativo (é a prática padrão e a primeira rodada deu +8), registrando isso no PR.
+- **Por quê:** o dono pediu para começar o teste assim que o bot subisse, sem esperar a
+  madrugada; testes de nós fixos não sofrem com disputa de CPU, e a disputa afeta as duas
+  engines do teste de relógio por igual.
+- **Custo se estiver errada:** ruído a mais no teste de relógio (mais partidas até decidir) e, no
+  pior caso, perdas por tempo falsas. As terminações são conferidas no PGN antes de aceitar.
+
+## D10 — 27/09/2026 — Branches da fase 3 empilhados
+
+- **Decisão:** cada melhoria de busca da fase 3 nasce em cima da anterior (correction history →
+  continuation history → …) e é testada contra o binário da anterior. O PR de cima aponta para o
+  branch de baixo e é redirecionado para a `main` quando o de baixo entra.
+- **Por quê:** testar cada uma contra a `main` e juntar depois mede combinações que ninguém
+  testou, e cada merge exigiria um novo commit de bench.
+- **Custo se estiver errada:** se uma de baixo falhar no SPRT, as de cima precisam de rebase e de
+  novo SPRT (algumas horas de CPU).
+
+## D11 — 27/09/2026 — Primeira NNUE sem passar pelo Texel tuning
+
+- **Decisão:** pular o ajuste da avaliação à mão (Texel tuning, previsto na D8) e ir direto para a
+  NNUE. Dados do `caipora datagen`: 5000 nós por lance, 8 lances aleatórios na abertura (abertura
+  acima de 1000 cp é descartada), só posições quietas (fora de xeque, melhor lance quieto,
+  |pontuação| < 2500), vitória adjudicada com 4 meios-lances a ±2500, empate adjudicado depois do
+  meio-lance 80 com 8 meios-lances dentro de 10 cp.
+- **Por quê:** a NNUE substitui a avaliação à mão, então o trabalho de ajustá-la se perde; os dados
+  gerados com a avaliação atual já trazem o sinal que importa (o resultado das partidas), e as
+  gerações seguintes usam a própria rede.
+- **Custo se estiver errada:** a primeira rede aprende de pontuações de uma avaliação fraca e sai
+  pior do que sairia com dados de uma avaliação ajustada; a segunda geração de dados (com a rede)
+  corrige isso, ao custo de ~1 dia de CPU a mais.
+
+## D12 — 27/09/2026 — Build x86-64-v3 e ganhos só de velocidade sem SPRT
+
+- **Decisão:** o build padrão passa a ser `target-cpu=x86-64-v3` (AVX2), em `.cargo/config.toml`.
+  Mudança que só acelera, com o **mesmo bench** (mesmos nós, mesma busca) e ganho de nós/s medido
+  em rodadas alternadas, entra sem SPRT.
+- **Por quê:** mesmo número de nós prova que a busca não mudou; o ganho de velocidade só pode
+  somar Elo. A CPU é o gargalo do projeto e SPRT de relógio custa horas. Medido: +7% de nós/s com a
+  avaliação à mão e +23% com a NNUE (e mais 3% com o produto em 16 bits na saída da rede).
+- **Custo se estiver errada:** o binário não roda em CPU sem AVX2 (anteriores a 2013); para esses,
+  compilar com `RUSTFLAGS="-C target-cpu=x86-64"`. Um ganho de velocidade medido errado custaria
+  pouco Elo e apareceria no próximo gauntlet.
+
+## D13 — 27/09/2026 — Regra dos 60% do tempo entra sem fechar o SPRT
+
+- **Decisão:** encerrar o SPRT de relógio da regra dos 60% (PR #8) em 657 partidas (+187 =286
+  −184, +1,6 Elo) e fazer o merge com base nas duas rodadas somadas: **1322 partidas, +5,0 Elo
+  (IC95% −9 a +19)**, nenhuma perda por tempo. Antecipa o critério da D9 (entra se não for
+  negativa), que previa esperar até ~8000 partidas.
+- **Por quê:** com ganho real perto de 5 Elo, um SPRT [0, 10] levaria milhares de partidas, com 3
+  núcleos por muitas horas. Esses núcleos geram ~1,7 milhão de posições/hora para a primeira NNUE,
+  onde está o ganho grande. A regra deu resultado não negativo nas duas rodadas e reduz o risco de
+  ficar sem tempo online (o Lichess não compensa o lag do Brasil).
+- **Custo se estiver errada:** até ~9 Elo perdidos (limite inferior do intervalo), o que apareceria
+  no próximo gauntlet; reverter é um commit.
+
+## D14 — 27/09/2026 — A primeira rede vai para dentro do executável
+
+- **Decisão:** a rede `net/caipora-g1.nnue` passa a ser embutida no executável e é a avaliação
+  padrão (`EvalFile` = `<embedded>`; `none` volta à avaliação à mão; um caminho carrega outra
+  rede). O `bench` usa a rede.
+- **Procedência:**
+  - dados: 10 milhões de posições do `caipora datagen`, binário 260c235, avaliação à mão,
+    5000 nós por lance, 8 lances aleatórios;
+  - treino: bullet c004ebf, (768 → 256)×2 → 1 SCReLU, 3 épocas, lr 0,001 com cosseno;
+  - **wdl 0**: o alvo é só a pontuação da busca.
+- **Por quê:**
+  - Com wdl 0,5 as redes inflavam a escala da avaliação. A perda na pontuação da busca foi 0,0084,
+    contra 0,0026 da avaliação à mão, e as redes perderam feio em jogo (−191).
+  - Com wdl 0 a rede prevê a pontuação melhor que a própria avaliação à mão: 0,00174 contra
+    0,00257, em 100 mil posições de partidas fora do treino.
+  - Em jogo, venceu a avaliação à mão por +220 ± 67 Elo em 100 partidas a 8+0.08 (68 vitórias,
+    20 empates, 12 derrotas). É uma diferença grande o bastante para não esperar o SPRT fechar.
+- **Custo se estiver errada:** o bench e toda medição passam a depender de um arquivo binário
+  versionado (394 KB). Se a rede tiver um defeito que só aparece em jogo longo, perde-se força até
+  a próxima; voltar é um commit (`EvalFile none` resolve na hora).

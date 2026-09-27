@@ -11,6 +11,7 @@ use crate::bench;
 use crate::eval::evaluate;
 use crate::movegen::{divide, generate_legal};
 use crate::moves::{Move, MoveKind};
+use crate::nnue::Network;
 use crate::position::Position;
 use crate::search::{IterationInfo, Searcher, uci_score};
 use crate::timeman::{GoParams, compute_limits};
@@ -63,7 +64,11 @@ impl Engine {
             history: Vec::new(),
             chess960: false,
             move_overhead: Duration::from_millis(DEFAULT_MOVE_OVERHEAD_MS),
-            searcher: Some(Searcher::new(DEFAULT_HASH_MB)),
+            searcher: Some({
+                let mut searcher = Searcher::new(DEFAULT_HASH_MB);
+                searcher.set_network(Some(crate::nnue::embedded()));
+                searcher
+            }),
             search_thread: None,
             stop: Arc::new(AtomicBool::new(false)),
             out,
@@ -72,6 +77,7 @@ impl Engine {
 
     /// Trata uma linha de comando. Devolve `false` quando é para encerrar.
     pub fn handle(&mut self, line: &str) -> bool {
+        crate::crash::record_command(line);
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let Some((&command, args)) = tokens.split_first() else {
             return true;
@@ -96,9 +102,16 @@ impl Engine {
             }
             "d" => self.display(),
             "eval" => {
-                let score = evaluate(&self.position);
-                self.out
-                    .line(&format!("info string eval {score} (side to move)"));
+                self.finish_search();
+                let pos = self.position;
+                let line = match self.searcher_mut().network() {
+                    Some(net) => format!(
+                        "info string eval {} (network, side to move)",
+                        net.evaluate(&pos)
+                    ),
+                    None => format!("info string eval {} (side to move)", evaluate(&pos)),
+                };
+                self.out.line(&line);
             }
             "bench" => {
                 self.finish_search();
@@ -145,6 +158,7 @@ impl Engine {
             ),
             "option name UCI_Chess960 type check default false".to_string(),
             "option name Clear Hash type button".to_string(),
+            "option name EvalFile type string default <embedded>".to_string(),
             "uciok".to_string(),
         ];
         for line in lines {
@@ -176,9 +190,41 @@ impl Engine {
                 self.finish_search();
                 self.searcher_mut().clear();
             }
+            "evalfile" => self.load_network(&value),
             _ => self
                 .out
                 .line(&format!("info string unknown option: {name}")),
+        }
+    }
+
+    /// `EvalFile`: `<embedded>` (o padrão) usa a rede do executável; `none` (ou vazio) volta à
+    /// avaliação à mão; qualquer outro valor é o caminho de uma rede. Em caso de erro, avisa e
+    /// mantém a avaliação que estava.
+    fn load_network(&mut self, path: &str) {
+        self.finish_search();
+        match path {
+            "<embedded>" => {
+                self.searcher_mut()
+                    .set_network(Some(crate::nnue::embedded()));
+                return;
+            }
+            "" | "none" | "<empty>" => {
+                self.searcher_mut().set_network(None);
+                return;
+            }
+            _ => {}
+        }
+        let loaded = std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| Network::from_bytes(&bytes).map_err(|e| e.to_string()));
+        match loaded {
+            Ok(net) => {
+                self.searcher_mut().set_network(Some(Arc::new(net)));
+                self.out.line(&format!("info string loaded network {path}"));
+            }
+            Err(error) => self
+                .out
+                .line(&format!("info string cannot load network {path}: {error}")),
         }
     }
 
@@ -463,6 +509,7 @@ mod tests {
             "option name Move Overhead type spin default 10 min 0 max 5000",
             "option name UCI_Chess960 type check default false",
             "option name Clear Hash type button",
+            "option name EvalFile type string default <embedded>",
         ] {
             assert!(text.contains(option), "falta {option}");
         }
@@ -569,6 +616,96 @@ mod tests {
         let text = out.text();
         assert!(text.contains("e2e4: 600"), "{text}");
         assert!(text.contains("Nodes searched: 8902"), "{text}");
+    }
+
+    #[test]
+    fn eval_file_loads_a_network_and_reports_errors() {
+        let dir = std::env::temp_dir();
+        let good = dir.join(format!("caipora-net-{}.nnue", std::process::id()));
+        std::fs::write(&good, crate::nnue::random_network_bytes(9)).unwrap();
+        let (mut loaded, buffer) = engine();
+        let path = good.to_str().unwrap();
+        send(
+            &mut loaded,
+            &[
+                &format!("setoption name EvalFile value {path}"),
+                "go depth 4",
+            ],
+        );
+        loaded.wait_for_search();
+        assert!(
+            buffer.text().contains("info string loaded network"),
+            "{}",
+            buffer.text()
+        );
+        assert!(!bestmove(&buffer).is_empty());
+        std::fs::remove_file(&good).unwrap();
+        // Arquivo que não existe ou de tamanho errado: avisa e continua com o que tinha.
+        let (mut missing, buffer) = engine();
+        send(
+            &mut missing,
+            &[
+                "setoption name EvalFile value C:/nao/existe.nnue",
+                "go depth 2",
+            ],
+        );
+        missing.wait_for_search();
+        assert!(
+            buffer.text().contains("info string cannot load network"),
+            "{}",
+            buffer.text()
+        );
+        assert!(!bestmove(&buffer).is_empty());
+    }
+
+    #[test]
+    fn eval_uses_the_network_when_one_is_loaded() {
+        let file = std::env::temp_dir().join(format!("caipora-eval-{}.nnue", std::process::id()));
+        let bytes = crate::nnue::random_network_bytes(21);
+        std::fs::write(&file, &bytes).unwrap();
+        let expected = Network::from_bytes(&bytes)
+            .unwrap()
+            .evaluate(&Position::startpos());
+        let (mut engine, buffer) = engine();
+        let path = file.to_str().unwrap();
+        send(
+            &mut engine,
+            &[&format!("setoption name EvalFile value {path}"), "eval"],
+        );
+        let text = buffer.text();
+        assert!(
+            text.contains(&format!(
+                "info string eval {expected} (network, side to move)"
+            )),
+            "{text}"
+        );
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn the_embedded_network_is_the_default_and_none_turns_it_off() {
+        let (mut default, buffer) = engine();
+        send(&mut default, &["eval"]);
+        assert!(
+            buffer.text().contains("(network, side to move)"),
+            "{}",
+            buffer.text()
+        );
+        let (mut off, buffer) = engine();
+        send(&mut off, &["setoption name EvalFile value none", "eval"]);
+        let text = buffer.text();
+        assert!(text.contains("info string eval"), "{text}");
+        assert!(!text.contains("(network"), "{text}");
+        // E volta à embutida.
+        send(
+            &mut off,
+            &["setoption name EvalFile value <embedded>", "eval"],
+        );
+        assert!(
+            buffer.text().contains("(network, side to move)"),
+            "{}",
+            buffer.text()
+        );
     }
 
     #[test]
