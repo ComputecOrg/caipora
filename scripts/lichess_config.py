@@ -90,7 +90,8 @@ def overrides(
             # a chave opponent_rating_difference do padrão é removida em main().
             "opponent_min_rating": rating_range[0],
             "opponent_max_rating": rating_range[1],
-            "challenge_mode": "random" if rated else "casual",
+            # Com --rated, os desafios que o bot envia valem rating; os recebidos podem ser dos dois.
+            "challenge_mode": "rated" if rated else "casual",
             "challenge_filter": "fine",
         },
     }
