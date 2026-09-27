@@ -8,6 +8,10 @@ Rodar DENTRO da pasta do lichess-bot, com o Python do venv dele:
 O token NÃO vai para o arquivo: o lichess-bot lê a variável de ambiente LICHESS_BOT_TOKEN.
 Por padrão só aceita partidas casual e não desafia ninguém; use --rated e --matchmaking depois
 das primeiras dezenas de partidas sem problema (ver docs/lichess.md).
+
+--eval-file passa a rede neural ao Caipora (opção UCI EvalFile). --opponent-rating MIN MAX limita
+os bots que o matchmaking desafia (padrão 2000 a 2600): em partidas casual o rating do bot fica no
+provisório de 3000, e a diferença relativa só acharia bots bem mais fortes.
 """
 
 import argparse
@@ -33,7 +37,9 @@ def merge(base: dict, overrides: dict) -> None:
             base[key] = value
 
 
-def overrides(engine_path: str, rated: bool, matchmaking: bool) -> dict:
+def overrides(
+    engine_path: str, rated: bool, matchmaking: bool, rating_range: tuple[int, int]
+) -> dict:
     return {
         "token": "",
         "engine": {
@@ -75,7 +81,10 @@ def overrides(engine_path: str, rated: bool, matchmaking: bool) -> dict:
             "challenge_timeout": 10,
             "challenge_initial_time": [180, 300],
             "challenge_increment": [2, 3],
-            "opponent_rating_difference": 250,
+            # Limites absolutos, não relativos ao rating do bot (provisório enquanto for casual);
+            # a chave opponent_rating_difference do padrão é removida em main().
+            "opponent_min_rating": rating_range[0],
+            "opponent_max_rating": rating_range[1],
             "challenge_mode": "random" if rated else "casual",
             "challenge_filter": "fine",
         },
@@ -128,15 +137,36 @@ def main() -> int:
     parser.add_argument("--engine", required=True, help="caminho do executável do Caipora")
     parser.add_argument("--rated", action="store_true", help="aceitar e pedir partidas rated")
     parser.add_argument("--matchmaking", action="store_true", help="desafiar outros bots")
+    parser.add_argument("--eval-file", help="rede neural (.nnue) passada como EvalFile")
+    parser.add_argument(
+        "--opponent-rating",
+        nargs=2,
+        type=int,
+        default=[2000, 2600],
+        metavar=("MIN", "MAX"),
+        help="faixa de rating dos bots desafiados",
+    )
     args = parser.parse_args()
+    rating_range = (args.opponent_rating[0], args.opponent_rating[1])
 
     with open("config.yml.default", encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
-    merge(config, overrides(args.engine, args.rated, args.matchmaking))
+    merge(config, overrides(args.engine, args.rated, args.matchmaking, rating_range))
+    # Sem a chave o lichess-bot usa os limites absolutos; com valor vazio o validador dele falha.
+    config["matchmaking"].pop("opponent_rating_difference", None)
     config["engine"]["uci_options"] = dict(UCI_OPTIONS)
+    if args.eval_file:
+        eval_file = os.path.abspath(args.eval_file)
+        if not os.path.isfile(eval_file):
+            print(f"rede não encontrada: {eval_file}")
+            return 1
+        config["engine"]["uci_options"]["EvalFile"] = eval_file
     with open("config.yml", "w", encoding="utf-8") as stream:
         yaml.safe_dump(config, stream, sort_keys=False, allow_unicode=True)
     print("config.yml gerado")
+    print(f"opções UCI: {config['engine']['uci_options']}")
+    print(f"matchmaking: {'ligado' if args.matchmaking else 'desligado'}, bots de {rating_range[0]} a "
+          f"{rating_range[1]}, {'rated' if args.rated else 'casual'}")
 
     # Validação com o próprio carregador do lichess-bot (não acessa a rede).
     sys.path.insert(0, os.getcwd())
