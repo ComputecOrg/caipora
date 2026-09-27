@@ -1,5 +1,6 @@
 //! Tabela de transposição: guarda, por hash de posição, o melhor lance e o resultado de buscas
-//! anteriores. Uma entrada por posição da tabela, com a chave completa para descartar colisões.
+//! anteriores. As entradas ficam em grupos de 4 (uma linha de cache); cada chave cai num grupo e
+//! pode ocupar qualquer entrada dele. A chave completa descarta colisões.
 
 use crate::moves::Move;
 
@@ -29,38 +30,62 @@ struct Slot {
     depth: i8,
     /// 0 = vazio; 1, 2, 3 = `Bound`.
     bound: u8,
+    /// Busca em que a entrada foi gravada (conta módulo 256).
+    generation: u8,
 }
 
+const CLUSTER_SIZE: usize = 4;
+
+#[derive(Clone, Copy, Default)]
+#[repr(C, align(64))]
+struct Cluster {
+    slots: [Slot; CLUSTER_SIZE],
+}
+
+/// Quanto vale manter uma entrada: profundidade, descontada pela idade (em buscas).
+const AGE_WEIGHT: i32 = 8;
+
 pub struct TranspositionTable {
-    slots: Vec<Slot>,
+    clusters: Vec<Cluster>,
+    generation: u8,
 }
 
 impl TranspositionTable {
     pub fn new(megabytes: usize) -> TranspositionTable {
-        let count = (megabytes.max(1) * 1024 * 1024 / std::mem::size_of::<Slot>()).max(1);
+        let count = (megabytes.max(1) * 1024 * 1024 / std::mem::size_of::<Cluster>()).max(1);
         TranspositionTable {
-            slots: vec![Slot::default(); count],
+            clusters: vec![Cluster::default(); count],
+            generation: 0,
         }
     }
 
     pub fn clear(&mut self) {
-        self.slots.fill(Slot::default());
+        self.clusters.fill(Cluster::default());
+        self.generation = 0;
+    }
+
+    /// Começo de uma nova busca: as entradas atuais passam a ser "da busca anterior".
+    pub fn new_search(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Mapeia a chave para `0..len` pela parte alta do produto, sem exigir potência de 2.
     fn index(&self, key: u64) -> usize {
-        ((u128::from(key) * self.slots.len() as u128) >> 64) as usize
+        ((u128::from(key) * self.clusters.len() as u128) >> 64) as usize
     }
 
     pub fn probe(&self, key: u64) -> Option<TtEntry> {
-        let slot = self.slots[self.index(key)];
+        let cluster = &self.clusters[self.index(key)];
+        let slot = cluster
+            .slots
+            .iter()
+            .find(|slot| slot.bound != 0 && slot.key == key)?;
         let bound = match slot.bound {
             1 => Bound::Exact,
             2 => Bound::Lower,
-            3 => Bound::Upper,
-            _ => return None,
+            _ => Bound::Upper,
         };
-        (slot.key == key).then_some(TtEntry {
+        Some(TtEntry {
             mv: slot.mv,
             score: i32::from(slot.score),
             depth: i32::from(slot.depth),
@@ -68,12 +93,25 @@ impl TranspositionTable {
         })
     }
 
-    /// Substitui sempre (política simples da v1), mas preserva o lance anterior da mesma posição
-    /// quando a nova busca não achou um.
+    /// Grava na entrada da mesma posição, se já existir no grupo; senão, numa vazia; senão, na que
+    /// vale menos (rasa ou velha). Preserva o lance anterior da mesma posição quando a nova busca
+    /// não achou um.
     pub fn store(&mut self, key: u64, mv: Option<Move>, score: i32, depth: i32, bound: Bound) {
+        let generation = self.generation;
         let index = self.index(key);
-        let slot = &mut self.slots[index];
-        let mv = if mv.is_none() && slot.key == key {
+        let cluster = &mut self.clusters[index];
+        let target = cluster
+            .slots
+            .iter()
+            .position(|slot| slot.bound != 0 && slot.key == key)
+            .or_else(|| cluster.slots.iter().position(|slot| slot.bound == 0))
+            .unwrap_or_else(|| {
+                (0..CLUSTER_SIZE)
+                    .min_by_key(|&i| worth(&cluster.slots[i], generation))
+                    .expect("grupo não vazio")
+            });
+        let slot = &mut cluster.slots[target];
+        let mv = if mv.is_none() && slot.bound != 0 && slot.key == key {
             slot.mv
         } else {
             mv
@@ -88,23 +126,37 @@ impl TranspositionTable {
                 Bound::Lower => 2,
                 Bound::Upper => 3,
             },
+            generation,
         };
     }
 
-    /// Ocupação em milésimos, estimada pelas primeiras 1000 posições (campo `hashfull` do UCI).
+    /// Ocupação em milésimos, estimada pelas primeiras 1000 entradas (campo `hashfull` do UCI).
     pub fn hashfull(&self) -> u32 {
-        let sample = &self.slots[..self.slots.len().min(1000)];
-        let used = sample.iter().filter(|slot| slot.bound != 0).count();
-        (used * 1000 / sample.len()) as u32
+        let sample = self
+            .clusters
+            .iter()
+            .flat_map(|cluster| cluster.slots.iter())
+            .take(1000);
+        let (used, total) = sample.fold((0, 0), |(used, total), slot| {
+            (used + usize::from(slot.bound != 0), total + 1)
+        });
+        (used * 1000 / total) as u32
     }
 
+    /// Número de entradas.
     pub fn len(&self) -> usize {
-        self.slots.len()
+        self.clusters.len() * CLUSTER_SIZE
     }
 
     pub fn is_empty(&self) -> bool {
-        self.slots.is_empty()
+        self.clusters.is_empty()
     }
+}
+
+/// Valor de manter a entrada: a profundidade, menos `AGE_WEIGHT` por busca de idade.
+fn worth(slot: &Slot, generation: u8) -> i32 {
+    let age = i32::from(generation.wrapping_sub(slot.generation));
+    i32::from(slot.depth) - AGE_WEIGHT * age
 }
 
 #[cfg(test)]
@@ -152,6 +204,70 @@ mod tests {
             (entry.score, entry.depth, entry.bound),
             (5, 4, Bound::Upper)
         );
+    }
+
+    /// Chaves que caem todas no mesmo grupo: a parte alta de `chave × grupos` é a mesma.
+    fn same_cluster(i: u64) -> u64 {
+        0x8000_0000_0000_0000 + i
+    }
+
+    #[test]
+    fn a_cluster_holds_four_entries_in_one_cache_line() {
+        assert_eq!(std::mem::size_of::<Cluster>(), 64);
+        assert_eq!(std::mem::align_of::<Cluster>(), 64);
+        let mut tt = TranspositionTable::new(1);
+        for i in 0..4 {
+            tt.store(same_cluster(i), None, i as i32, 3, Bound::Exact);
+        }
+        for i in 0..4 {
+            assert_eq!(tt.probe(same_cluster(i)).map(|e| e.score), Some(i as i32));
+        }
+    }
+
+    #[test]
+    fn a_deep_entry_survives_shallow_stores_to_its_cluster() {
+        let mut tt = TranspositionTable::new(1);
+        tt.store(same_cluster(0), Some(mv("e2", "e4")), 50, 12, Bound::Exact);
+        for i in 1..40 {
+            tt.store(same_cluster(i), None, 0, 1, Bound::Upper);
+        }
+        assert_eq!(tt.probe(same_cluster(0)).map(|e| e.depth), Some(12));
+    }
+
+    #[test]
+    fn entries_from_older_searches_are_replaced_first() {
+        let mut tt = TranspositionTable::new(1);
+        for i in 0..4 {
+            tt.store(same_cluster(i), None, 0, 5, Bound::Exact);
+        }
+        tt.new_search();
+        for i in 4..8 {
+            tt.store(same_cluster(i), None, 0, 1, Bound::Exact);
+        }
+        for i in 0..4 {
+            assert_eq!(tt.probe(same_cluster(i)), None, "antiga {i}");
+        }
+        for i in 4..8 {
+            assert!(tt.probe(same_cluster(i)).is_some(), "nova {i}");
+        }
+    }
+
+    #[test]
+    fn the_same_position_is_updated_in_place() {
+        let mut tt = TranspositionTable::new(1);
+        tt.store(same_cluster(0), None, 10, 6, Bound::Lower);
+        tt.store(same_cluster(0), None, 20, 2, Bound::Upper);
+        for i in 1..4 {
+            tt.store(same_cluster(i), None, 0, 9, Bound::Exact);
+        }
+        let entry = tt.probe(same_cluster(0)).unwrap();
+        assert_eq!(
+            (entry.score, entry.depth, entry.bound),
+            (20, 2, Bound::Upper)
+        );
+        for i in 1..4 {
+            assert!(tt.probe(same_cluster(i)).is_some());
+        }
     }
 
     #[test]

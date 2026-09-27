@@ -180,3 +180,17 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** o bench e toda medição passam a depender de um arquivo binário
   versionado (394 KB). Se a rede tiver um defeito que só aparece em jogo longo, perde-se força até
   a próxima; voltar é um commit (`EvalFile none` resolve na hora).
+
+## D15 — 27/09/2026 — TT em grupos de 4 entra com SPRT sem decisão
+
+- **Decisão:** a TT em grupos de 4 (PR #15) entra com **+5,6 ± 6,3 Elo em 5.658 partidas**.
+  - Condições: nós fixos, rede nos dois lados, contra a continuation history. LLR 1,42, ainda
+    sem fechar quando a máquina se apagou.
+  - Todas as terminações normais.
+  - A regra é a mesma da D13: resultado não negativo e bem medido entra.
+  - A TT na quiescente (PR #16), aprovada no SPRT (+50) **contra a TT em grupos**, entra junto.
+- **Por quê:** com milhares de partidas o sinal é positivo (IC95% ~ −0,7 a +11,9). Uma TT que não
+  perde entradas profundas é correta por construção. Esperar o SPRT fechar custaria outra
+  rodada de máquina.
+- **Custo se estiver errada:** algo perto de 1 Elo perdido (o limite inferior do intervalo). A TT
+  na quiescente foi medida em cima dela, então tirar uma exigiria retestar a outra.
