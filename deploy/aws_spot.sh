@@ -11,6 +11,13 @@
 #       Um `caipora datagen` por núcleo; para sozinho depois de <horas>.
 #   deploy/aws_spot.sh fetch <id> <prefixo>
 #       Traz os arquivos datagen/<prefixo>-*.txt, compactados.
+#   deploy/aws_spot.sh sprt <id> <binário novo> <binário base> <tag> <concorrência> [semente]
+#       SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]) em segundo plano, numa pasta por tag.
+#       Várias tags podem rodar juntas, repartindo os núcleos.
+#   deploy/aws_spot.sh sprt-status <id>
+#       Placar de cada SPRT (partidas, Elo, LLR, se terminou e as terminações).
+#   deploy/aws_spot.sh sprt-fetch <id>
+#       Traz as pastas dos SPRTs para tools/aws-sprt/.
 #   deploy/aws_spot.sh stop <id>
 #       Apaga a máquina na hora.
 #   deploy/aws_spot.sh list
@@ -102,6 +109,49 @@ case "$cmd" in
       > "datagen/$prefix-aws-$id.txt.gz"
     ls -la "datagen/$prefix-aws-$id.txt.gz"
     echo "posições: $(gzip -dc "datagen/$prefix-aws-$id.txt.gz" | wc -l)"
+    ;;
+  sprt)
+    id=$2; new=$3; base=$4; tag=$5; conc=$6; seed=${7:-1}
+    ip=$(ip_of "$id")
+    ssh_ "$ip" "mkdir -p ~/caipora/bin ~/caipora/sprt/$tag"
+    # Só envia o que ainda não está lá: um binário em uso por outro SPRT não pode ser sobrescrito.
+    for bin in "$new" "$base"; do
+      ssh_ "$ip" "test -f ~/caipora/bin/$(basename "$bin")" ||
+        scp -q -i "$KEY" -o UserKnownHostsFile="$KNOWN" "$bin" "ubuntu@$ip:caipora/bin/"
+    done
+    ssh_ "$ip" 'test -f ~/caipora/8moves_v3.epd' ||
+      scp -q -i "$KEY" -o UserKnownHostsFile="$KNOWN" tools/8moves_v3.epd "ubuntu@$ip:caipora/"
+    ssh_ "$ip" "cd ~/caipora && chmod +x bin/* && if [ ! -x fastchess ]; then
+        curl -sSL https://github.com/Disservin/fastchess/releases/download/v1.8.2-alpha/fastchess-linux-x86-64.tar -o fc.tar
+        mkdir -p fc && tar -xf fc.tar -C fc && cp \$(find fc -type f -name fastchess | head -1) fastchess
+        chmod +x fastchess
+      fi
+      cd sprt/$tag && nohup ../../fastchess \
+        -engine cmd=../../bin/$(basename "$new") name=novo \
+        -engine cmd=../../bin/$(basename "$base") name=base \
+        -each tc=60+1 nodes=100000 option.Hash=16 \
+        -openings file=../../8moves_v3.epd format=epd order=random -srand $seed \
+        -rounds 20000 -games 2 -repeat -concurrency $conc -recover \
+        -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 \
+        -pgnout file=$tag.pgn -log file=$tag.log level=warn > $tag.out 2>&1 < /dev/null &
+      echo \"SPRT $tag: $(basename "$new") contra $(basename "$base"), concorrência $conc\""
+    ;;
+  sprt-status)
+    ip=$(ip_of "$2")
+    ssh_ "$ip" 'cd ~/caipora/sprt && for d in */; do t=${d%/}
+        games=$(grep -c "^\[Result" "$t/$t.pgn" 2>/dev/null || echo 0)
+        elo=$(grep -E "^Elo:" "$t/$t.out" | tail -1 | cut -c1-40)
+        llr=$(grep -E "^LLR:" "$t/$t.out" | tail -1 | cut -c1-32)
+        done_=$(grep -oE "H[01] was accepted" "$t/$t.out" | tail -1)
+        ends=$(grep -h "^\[Termination" "$t/$t.pgn" 2>/dev/null | sort | uniq -c | tr -s " " | tr "\n" ";")
+        echo "$t | $games partidas | $elo | $llr | ${done_:-rodando} | $ends"
+      done'
+    ;;
+  sprt-fetch)
+    ip=$(ip_of "$2")
+    mkdir -p tools/aws-sprt
+    scp -q -r -i "$KEY" -o UserKnownHostsFile="$KNOWN" "ubuntu@$ip:caipora/sprt/*" tools/aws-sprt/
+    ls tools/aws-sprt
     ;;
   stop)
     aws_ ec2 terminate-instances --instance-ids "$2" \

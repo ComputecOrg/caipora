@@ -114,3 +114,19 @@ deploy/aws_spot.sh list                        # vazio = nada gerando custo
   32 vCPUs de spot em eu-north-1 (liberados durante a análise do pedido de 192), us-east-1 e
   us-west-2. Primeira rodada real: 2× c7a.8xlarge, uma em Estocolmo (US$ 0,25/h) e outra na
   Virgínia (US$ 0,52/h), por ~3 h, gerando os dados g2 com a rede g1.
+
+## SPRTs na AWS
+
+```bash
+deploy/aws_spot.sh sprt <id> tools/linux/caipora-novo tools/linux/caipora-base <tag> 6 <semente>
+deploy/aws_spot.sh sprt-status <id>
+deploy/aws_spot.sh sprt-fetch <id>        # tools/aws-sprt/<tag>/
+```
+
+- Os binários são estáticos (musl), um por branch. A rede vai embutida, então os dois lados jogam
+  com ela sem opção extra.
+- Várias tags rodam juntas repartindo os núcleos. Em 27/09/2026, 5 SPRTs com concorrência 6 numa
+  c7a.8xlarge (32 núcleos) davam ~38 partidas/min cada, a 100 mil nós por lance.
+- O fastchess roda com a entrada ligada a `/dev/null`; sem isso o `ssh` ficava preso esperando.
+- Binário já enviado não é enviado de novo, porque um executável em uso não pode ser
+  sobrescrito.
