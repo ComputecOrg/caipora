@@ -45,6 +45,16 @@ impl Move {
         Move(NonZeroU16::new(raw).expect("origem e destino diferentes nunca dão zero"))
     }
 
+    /// Os 16 bits do lance, para guardar em estruturas compactas (0 nunca é lance).
+    pub fn to_bits(self) -> u16 {
+        self.0.get()
+    }
+
+    /// O inverso de `to_bits`; 0 é "sem lance".
+    pub fn from_bits(bits: u16) -> Option<Move> {
+        NonZeroU16::new(bits).map(Move)
+    }
+
     pub fn from(self) -> Square {
         Square::from_low_bits(self.0.get())
     }
@@ -166,6 +176,36 @@ impl<'a> IntoIterator for &'a MoveList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_move_survives_the_round_trip_through_its_bits() {
+        let moves = [
+            Move::new(
+                "e2".parse().unwrap(),
+                "e4".parse().unwrap(),
+                MoveKind::Normal,
+            ),
+            Move::new(
+                "e1".parse().unwrap(),
+                "h1".parse().unwrap(),
+                MoveKind::Castle,
+            ),
+            Move::new(
+                "e5".parse().unwrap(),
+                "d6".parse().unwrap(),
+                MoveKind::EnPassant,
+            ),
+            Move::new(
+                "a7".parse().unwrap(),
+                "a8".parse().unwrap(),
+                MoveKind::Promotion(PieceType::Knight),
+            ),
+        ];
+        for mv in moves {
+            assert_eq!(Move::from_bits(mv.to_bits()), Some(mv));
+        }
+        assert_eq!(Move::from_bits(0), None);
+    }
 
     fn sq(s: &str) -> Square {
         s.parse().unwrap()

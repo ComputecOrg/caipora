@@ -369,7 +369,7 @@ impl Searcher {
                 vec![Accumulators::new(net, root); MAX_PLY + 2]
             }),
             network,
-            tt: &mut self.tt,
+            tt: &self.tt,
             history: &mut self.history,
             continuation: &mut self.continuation,
             correction: &mut self.correction,
@@ -394,7 +394,7 @@ impl Searcher {
 
 /// Estado de uma busca em andamento.
 struct SearchState<'a> {
-    tt: &'a mut TranspositionTable,
+    tt: &'a TranspositionTable,
     history: &'a mut History,
     continuation: &'a mut ContinuationHistory,
     correction: &'a mut CorrectionHistory,
