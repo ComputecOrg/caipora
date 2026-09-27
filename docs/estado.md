@@ -1,5 +1,28 @@
 # Estado do Caipora
 
+## v3.1 — 27/09/2026 (PRs #10, #15, #16: busca da fase 3 com a rede)
+
+- **Força estimada: ~2879 CCRL Blitz** (+64 sobre a v3). Gauntlet a 8+0.08, 80 partidas por
+  adversário, main 62d57c0:
+
+  | Adversário (CCRL Blitz) | Placar do Caipora | Na v3 |
+  |---|---|---|
+  | Stash 19 (2473) | 89,4% | 86,9% |
+  | Stash 21 (2713) | 71,3% | 65,6% |
+  | Stash 25 (2933) | 45,0% | 33,8% |
+
+  Nenhuma derrota do Caipora por tempo; as 2 perdas por tempo foram do Stash 21.
+- **O que entrou.** SPRTs de nós fixos na AWS (100 mil nós, rede nos dois lados):
+  - continuation history: +28 ± 15, aprovada;
+  - TT em grupos de 4: +5,6 ± 6,3 em 5.658 partidas, pela regra D15;
+  - TT na busca quiescente: +50 ± 20, aprovada.
+- **Não entrou:**
+  - capture history: −13 ± 12, reprovada;
+  - LMR por histórico: medida contra a capture history, fica para reteste.
+- **Bench:** 3306025. Roda no bot do servidor desde 27/09/2026 ~14:15.
+- **Rodada de dados g2 perdida.** Os ~138 milhões de posições se perderam por falha na coleta. A
+  coleta foi corrigida (PR #34), e os dados precisam ser gerados de novo.
+
 ## v3 — 27/09/2026 (PRs #24 e #27: primeira NNUE)
 
 - **Força estimada: ~2815 CCRL Blitz** (+375 sobre a v2). Gauntlet a 8+0.08, 80 partidas por
