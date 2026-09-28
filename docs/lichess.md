@@ -71,6 +71,13 @@ venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py `
   absoluta fica de reserva para quando ele não tem rating no ritmo. Desde 27/09/2026 o bot do
   servidor usa ±300 (com rating 2543 havia 59 bots online nessa faixa).
 
+## Livro e tablebases (D19)
+
+O bot joga as aberturas pelo chessdb e pela análise em nuvem do Lichess (melhor lance, profundidade
+≥ 20; para de consultar depois de 10 posições sem lance) e finais de até 7 peças pela tablebase do
+Lichess (com pelo menos 5 s no relógio). O log do lichess-bot mostra "Got move ... from chessdb.cn",
+"... from lichess cloud analysis" e "... from lichess.org" (tablebase).
+
 ## Regras do Lichess que afetam o bot
 
 - **100 partidas bot contra bot por dia**, contando desafios recebidos; contra humanos não há

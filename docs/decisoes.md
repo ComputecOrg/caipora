@@ -256,3 +256,18 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
     g2 no mesmo gauntlet em 3094 ± 26 (régua calibrada).
 - **Custo se estiver errada:** a rede e a engine ficam amarradas ao tamanho 512: redes antigas de
   256 não carregam mais sem recompilar. Voltar é reverter o commit (rede e `HIDDEN` juntos).
+
+## D19 — 28/09/2026 — O bot do Lichess usa livro e tablebases de fora
+
+- **Decisão (do dono, pela meta de 3000 no Lichess):** no bot, as aberturas vêm do chessdb
+  (`querypv`, o melhor lance com profundidade ≥ 20) e da análise em nuvem do Lichess; finais de
+  até 7 peças vêm da tablebase do Lichess. O explorador de aberturas fica desligado (lances de
+  humanos). Vale só para o bot: CCRL e gauntlet continuam medindo a engine com os livros deles.
+- **Por quê:**
+  - o bot gastava 46% do tempo base nos lances 2 a 11, contra 32% dos adversários; lance de
+    livro sai na hora;
+  - finais de poucas peças saem perfeitos (a engine ainda não lê tablebases);
+  - os bots de 2750+ que nos venceram usam livro e, alguns, Syzygy.
+- **Custo se estiver errada:** o bot depende de serviços de fora (chessdb e Lichess); se caírem,
+  o lichess-bot volta para a engine depois de 2 tentativas. As aberturas deixam de mostrar o
+  estilo da engine. Voltar é um parâmetro no `scripts/lichess_config.py`.
