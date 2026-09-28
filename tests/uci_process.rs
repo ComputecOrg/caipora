@@ -85,7 +85,12 @@ fn handshake_search_and_quit() {
         "{:?}",
         start.elapsed()
     );
-    assert_eq!(best.split_whitespace().count(), 2, "{best}");
+    // `bestmove X` ou `bestmove X ponder Y`.
+    let tokens: Vec<&str> = best.split_whitespace().collect();
+    assert!(
+        tokens.len() == 2 || (tokens.len() == 4 && tokens[2] == "ponder"),
+        "{best}"
+    );
     engine.send("quit");
     assert!(engine.wait_exit(Duration::from_secs(5)));
 }

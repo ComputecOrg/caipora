@@ -17,6 +17,9 @@ pub struct GoParams {
     pub depth: Option<u32>,
     pub nodes: Option<u64>,
     pub infinite: bool,
+    /// `go ponder`: busca na posição com o lance esperado do adversário; o tempo calculado dos
+    /// relógios só começa a contar no `ponderhit`.
+    pub ponder: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

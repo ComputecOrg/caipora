@@ -277,6 +277,8 @@ pub struct Searcher {
     helpers: Vec<ThreadTables>,
     /// Rede neural da avaliação; sem ela, a avaliação à mão.
     network: Option<Arc<Network>>,
+    /// Ligado durante o `go ponder`: o relógio é do adversário até o `ponderhit` desligá-lo.
+    pondering: Arc<AtomicBool>,
 }
 
 impl Searcher {
@@ -286,7 +288,14 @@ impl Searcher {
             main: ThreadTables::new(),
             helpers: Vec::new(),
             network: None,
+            pondering: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Sinal de ponder (ver `pondering`), para a UCI ligar no `go ponder` e desligar no
+    /// `ponderhit`.
+    pub fn ponder_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.pondering)
     }
 
     /// Troca a avaliação: `Some` passa a usar a rede; `None` volta à avaliação à mão.
@@ -353,8 +362,9 @@ impl Searcher {
             main,
             helpers,
             network,
+            pondering,
         } = self;
-        let (tt, network) = (&*tt, network.as_deref());
+        let (tt, network, pondering) = (&*tt, network.as_deref(), &**pondering);
         let helpers_stop = AtomicBool::new(false);
         std::thread::scope(|scope| {
             let workers: Vec<_> = helpers
@@ -364,8 +374,16 @@ impl Searcher {
                     std::thread::Builder::new()
                         .stack_size(HELPER_STACK_BYTES)
                         .spawn_scoped(scope, move || {
-                            let mut state =
-                                new_state(tt, tables, network, root, history, limits, helpers_stop);
+                            let mut state = new_state(
+                                tt,
+                                tables,
+                                network,
+                                root,
+                                history,
+                                limits,
+                                helpers_stop,
+                                pondering,
+                            );
                             state.iterate_quietly(root, max_depth);
                             state.nodes
                         })
@@ -373,7 +391,7 @@ impl Searcher {
                 })
                 .collect();
 
-            let mut state = new_state(tt, main, network, root, history, limits, stop);
+            let mut state = new_state(tt, main, network, root, history, limits, stop, pondering);
             let mut best = SearchResult {
                 best_move: Some(first_move),
                 score: 0,
@@ -407,9 +425,11 @@ impl Searcher {
                     hashfull: state.tt.hashfull(),
                     pv,
                 });
-                if !should_start_iteration(state.start.elapsed(), limits)
-                    || state.stop.load(Ordering::Relaxed)
-                {
+                // Enquanto pondera, sempre aprofunda: quem encerra é o `ponderhit` ou o `stop`.
+                let deepen = state
+                    .clock()
+                    .is_none_or(|elapsed| should_start_iteration(elapsed, limits));
+                if !deepen || state.stop.load(Ordering::Relaxed) {
                     break;
                 }
             }
@@ -441,11 +461,14 @@ impl Searcher {
             history,
             limits,
             stop,
+            &self.pondering,
         )
     }
 }
 
 /// Estado de busca de um thread: a TT e a rede são de todos; as tabelas, deste thread.
+// Cada argumento é uma peça distinta do estado; agrupá-los só para o lint esconderia a origem.
+#[allow(clippy::too_many_arguments)]
 fn new_state<'a>(
     tt: &'a TranspositionTable,
     tables: &'a mut ThreadTables,
@@ -454,6 +477,7 @@ fn new_state<'a>(
     history: &[u64],
     limits: &'a Limits,
     stop: &'a AtomicBool,
+    pondering: &'a AtomicBool,
 ) -> SearchState<'a> {
     let mut hashes = Vec::with_capacity(history.len() + MAX_PLY + 1);
     hashes.extend_from_slice(history);
@@ -470,6 +494,8 @@ fn new_state<'a>(
         killers: vec![[None, None]; MAX_PLY + 2],
         evals: vec![-INFINITY; MAX_PLY + 2],
         stop,
+        pondering,
+        awaiting_ponderhit: pondering.load(Ordering::Relaxed),
         limits,
         start: Instant::now(),
         nodes: 0,
@@ -496,7 +522,12 @@ struct SearchState<'a> {
     /// Avaliação estática de cada nível do caminho atual (`-INFINITY` quando em xeque).
     evals: Vec<i32>,
     stop: &'a AtomicBool,
+    /// Sinal de ponder do `Searcher`; `awaiting_ponderhit` diz se esta busca começou pondering e
+    /// o relógio ainda não começou a contar.
+    pondering: &'a AtomicBool,
+    awaiting_ponderhit: bool,
     limits: &'a Limits,
+    /// Começo da busca ou, se ela começou pondering, o momento em que viu o `ponderhit`.
     start: Instant,
     nodes: u64,
     poll_counter: u32,
@@ -560,6 +591,19 @@ impl SearchState<'_> {
         }
     }
 
+    /// Tempo gasto contra o nosso relógio; `None` enquanto pondera, porque o relógio que corre é o
+    /// do adversário. Na primeira consulta depois do `ponderhit`, o nosso começa a contar.
+    fn clock(&mut self) -> Option<Duration> {
+        if self.awaiting_ponderhit {
+            if self.pondering.load(Ordering::Relaxed) {
+                return None;
+            }
+            self.awaiting_ponderhit = false;
+            self.start = Instant::now();
+        }
+        Some(self.start.elapsed())
+    }
+
     /// A primeira iteração nunca é interrompida; depois, para por `stop`, limite de nós ou tempo
     /// duro (esses dois últimos checados a cada 1024 chamadas).
     fn should_stop(&mut self) -> bool {
@@ -576,10 +620,9 @@ impl SearchState<'_> {
         self.poll_counter += 1;
         if self.poll_counter >= 1024 {
             self.poll_counter = 0;
-            let out_of_time = self
-                .limits
-                .hard_time
-                .is_some_and(|hard| self.start.elapsed() >= hard);
+            let hard_time = self.limits.hard_time;
+            let out_of_time =
+                hard_time.is_some_and(|hard| self.clock().is_some_and(|elapsed| elapsed >= hard));
             if out_of_time || self.stop.load(Ordering::Relaxed) {
                 self.stopped = true;
             }
@@ -1259,6 +1302,52 @@ mod tests {
         };
         let result = run(crate::position::STARTPOS_FEN, nodes);
         assert!(result.nodes <= 22_000, "nós {}", result.nodes);
+        assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn a_ponder_search_starts_the_clock_at_ponderhit() {
+        // Limite duro de 50 ms, mas pondera por 300 ms: o tempo só conta depois do ponderhit.
+        let limits = Limits {
+            hard_time: Some(Duration::from_millis(50)),
+            soft_time: Some(Duration::from_millis(50)),
+            ..Limits::default()
+        };
+        let mut searcher = Searcher::new(16);
+        let pondering = searcher.ponder_signal();
+        pondering.store(true, Ordering::Relaxed);
+        let start = Instant::now();
+        // O tempo é medido ao fim da busca: o escopo ainda espera a thread do ponderhit.
+        let (result, elapsed) = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                pondering.store(false, Ordering::Relaxed);
+            });
+            let stop = AtomicBool::new(false);
+            let result = searcher.search(&Position::startpos(), &[], &limits, &stop, &mut |_| {});
+            (result, start.elapsed())
+        });
+        assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(1_300), "{elapsed:?}");
+        assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn stop_ends_a_ponder_search() {
+        let mut searcher = Searcher::new(16);
+        searcher.ponder_signal().store(true, Ordering::Relaxed);
+        let stop = AtomicBool::new(false);
+        let start = Instant::now();
+        let (result, elapsed) = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                stop.store(true, Ordering::Relaxed);
+            });
+            let limits = Limits::default();
+            let result = searcher.search(&Position::startpos(), &[], &limits, &stop, &mut |_| {});
+            (result, start.elapsed())
+        });
+        assert!(elapsed < Duration::from_millis(1_000), "{elapsed:?}");
         assert!(result.best_move.is_some());
     }
 
