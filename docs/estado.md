@@ -1,5 +1,22 @@
 # Estado do Caipora
 
+## v3.4 — 28/09/2026 (PR da g4: rede treinada com dados do Lc0)
+
+- **Força estimada: ~3435 ± 22 CCRL Blitz** com 1 thread (+~190 sobre a v3.3). Gauntlet na AWS
+  a 8+0.08, 300 partidas por adversário, todas com terminação normal
+  (`tools/aws-sprt/gauntlet-g4/`):
+
+  | Adversário (CCRL Blitz) | v3.4 (g4) | v3.3 (g3) |
+  |---|---|---|
+  | Stash 33 (3273) | 73,2% | 44,2% |
+  | Stash 37 (3419) | 50,8% | 26,8% |
+
+- **O que entrou:** rede g4 (D20, D21), 512 na camada oculta, treinada só com dados do Lc0
+  (ODbL), escala da engine 0,70 (`SCALE` 280). SPRT de relógio contra a g3: +237 ± 45.
+- **No bot:** livro (chessdb + nuvem do Lichess) e tablebase online até 7 peças (D19).
+- **Bench:** 2472196.
+- **Tucano (3491):** a ~55 pontos.
+
 ## v3.3 — 28/09/2026 (PRs #47 e #50: ponder e rede g3 com 512)
 
 - **Força estimada: ~3242 ± 23 CCRL Blitz** com 1 thread (+~135 sobre a v3.2). Gauntlet na AWS a
