@@ -79,7 +79,8 @@ caipora-trainer g1.bin caipora-g1 <superbatches> [lotes por superbatch] [wdl] [l
 
 ## Rede embutida
 
-`net/caipora-g1.nnue` vai dentro do executável (D14) e é a avaliação padrão. Pela opção `EvalFile`:
+`net/caipora-g2.nnue` vai dentro do executável (D14, D16) e é a avaliação padrão. Pela opção
+`EvalFile`:
 
 | Valor | Avaliação |
 |---|---|

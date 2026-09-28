@@ -194,3 +194,23 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   rodada de máquina.
 - **Custo se estiver errada:** algo perto de 1 Elo perdido (o limite inferior do intervalo). A TT
   na quiescente foi medida em cima dela, então tirar uma exigiria retestar a outra.
+
+## D16 — 27/09/2026 — A rede g2 substitui a g1 dentro do executável
+
+- **Decisão:** `net/caipora-g2.nnue` passa a ser a rede embutida (D14 continua valendo para o
+  resto) e `net/caipora-g1.nnue` sai do repositório (fica no histórico do git).
+- **Procedência:**
+  - dados: 159 milhões de posições do `caipora datagen` jogadas e pontuadas pela rede g1, 5000
+    nós por lance, 8 lances aleatórios. 157 milhões vieram da AWS (binário 62d57c0, 64
+    geradores numa c7a.16xlarge, sementes 40001 a 40064) e ~3 milhões de casa;
+  - treino: bullet c004ebf, (768 → 256)×2 → 1 SCReLU, wdl 0, 10 épocas, lr 0,001 com cosseno;
+  - **época 9**, a de menor perda de validação: 1,6 milhão de posições fora do treino (1% final
+    de cada arquivo), 0,002079, contra 0,002084 na época 10, 0,003184 da g1 e 0,005927 da
+    avaliação à mão.
+- **Por quê:** SPRT na AWS, a mesma engine dos dois lados, só a rede muda (`EvalFile`):
+  - nós fixos (100 mil): **+338 ± 53 Elo** em 178 partidas (131 vitórias, 39 empates, 2
+    derrotas; nenhum par perdido);
+  - 8+0.08: **+331 ± 57 Elo** em 178 partidas, todas com terminação normal.
+- **Custo se estiver errada:** a rede tem 16 vezes mais dados que a g1 e ganhou nos dois
+  controles, então o risco é de defeito que só aparece em jogo longo; aparece no bot e no próximo
+  gauntlet, e voltar é um commit (ou `EvalFile` com a g1 guardada fora do repositório).
