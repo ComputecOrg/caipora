@@ -214,3 +214,23 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** a rede tem 16 vezes mais dados que a g1 e ganhou nos dois
   controles, então o risco é de defeito que só aparece em jogo longo; aparece no bot e no próximo
   gauntlet, e voltar é um commit (ou `EvalFile` com a g1 guardada fora do repositório).
+
+## D17 — 27/09/2026 — Ponder entra na variante que conta o tempo pensado como gasto
+
+- **Decisão:** o Caipora pondera (`go ponder`, `ponderhit`, `bestmove X ponder Y`, opção
+  `Ponder`) e o bot do Lichess liga o ponder. No acerto, o tempo pensado no ponder conta para o
+  limite suave, e o duro conta do `ponderhit`. Se o ponder já cobriu o limite suave, o lance sai
+  na hora; buscas de ponder têm limite suave 25% maior (ideia do Stockfish).
+- **Como foi medido:** o fastchess não pondera. `scripts/ponder_match.py` joga pelo
+  python-chess, o mesmo caminho do lichess-bot (`go ponder`; `ponderhit` no acerto; `stop` e
+  `go` novo no erro). Caipora com ponder contra ele mesmo sem ponder, 8+0.08, 1 thread, 300
+  aberturas com as duas cores, na AWS:
+  - (a) relógio começa no `ponderhit`, orçamento inteiro de novo: **+90 ± 18** em 600 partidas;
+  - (b) esta variante: **+84 ± 18** em 600 partidas;
+  - nas duas: 66% de acerto do lance previsto, 99% dos lances com lance de ponder, nenhuma
+    derrota por tempo nem lance ilegal.
+- **Por quê (b):** a diferença entre as duas é ruído, e a (b) joga mais rápido e guarda relógio.
+  O bot gasta 46% do tempo base nos lances 2 a 11, contra 32% dos adversários, e o dono notou
+  a lentidão.
+- **Custo se estiver errada:** alguns Elo a menos que a (a), dentro do erro; voltar é reverter o
+  commit da variante (b).

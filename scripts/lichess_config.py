@@ -52,8 +52,9 @@ def overrides(
             "dir": os.path.dirname(os.path.abspath(engine_path)),
             "name": os.path.basename(engine_path),
             "protocol": "uci",
-            # O Caipora ainda não implementa ponder.
-            "ponder": False,
+            # Pensa no tempo do adversário: `go ponder` com a resposta esperada; no acerto, o
+            # tempo pensado conta como gasto e, se já cobriu o orçamento, o lance sai na hora.
+            "ponder": True,
             "polyglot": {"enabled": False},
             # Nada de lances vindos de fora: o resultado tem de medir a nossa engine.
             "online_moves": {

@@ -62,6 +62,8 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   versões do Stash com rating CCRL conhecido. Do Git Bash:
   `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_gauntlet.sh`.
   Não rodar junto com outro teste pesado (6 núcleos): disputa de CPU gera perda por tempo falsa.
+- Ponder: o fastchess não pondera. `scripts/ponder_match.py` joga pelo python-chess, como o
+  lichess-bot (D17); cada partida usa até 2 núcleos, então processos <= metade dos núcleos.
 
 ## Ferramentas locais (pasta `tools/`, fora do git)
 - `tools/fastchess/fastchess-windows-x86-64/fastchess.exe` (v1.8.2-alpha) e o livro
