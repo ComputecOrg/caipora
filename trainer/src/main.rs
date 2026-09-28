@@ -2,8 +2,8 @@
 //!
 //! A arquitetura e a quantização precisam bater com `src/nnue.rs` da engine:
 //! (768 → HIDDEN)×2 → 1, SCReLU, QA = 255, QB = 64, escala 400. HIDDEN vem da variável de
-//! ambiente `CAIPORA_HIDDEN` (padrão 256), para experimentar redes maiores; a engine precisa ser
-//! compilada com o mesmo `HIDDEN`.
+//! ambiente `CAIPORA_HIDDEN` (padrão 512, o da engine); a engine precisa ser compilada com o
+//! mesmo `HIDDEN`.
 //!
 //! Uso:
 //! `caipora-trainer <dados.bin> <id> <superbatches> [lotes por superbatch] [wdl] [lr inicial]`
@@ -28,7 +28,7 @@ use bullet::{
     value::{ValueTrainerBuilder, loader},
 };
 
-const DEFAULT_HIDDEN: usize = 256;
+const DEFAULT_HIDDEN: usize = 512;
 const SCALE: i32 = 400;
 const QA: i16 = 255;
 const QB: i16 = 64;
