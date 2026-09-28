@@ -16,6 +16,9 @@
 - **No bot:** livro (chessdb + nuvem do Lichess) e tablebase online até 7 peças (D19).
 - **Bench:** 2472196.
 - **Tucano (3491):** a ~55 pontos.
+- **Distância até o topo:** contra o Stockfish 19 oficial (lançado em 05/09/2026), os dois com 1
+  thread, 8+0.08, 200 partidas na AWS: 0 vitórias, 30 empates, 170 derrotas (7,5%), −436 ± 62
+  Elo (`tools/aws-sprt/sf19/`). Pela régua do gauntlet, o Stockfish estaria em ~3870.
 
 ## v3.3 — 28/09/2026 (PRs #47 e #50: ponder e rede g3 com 512)
 
