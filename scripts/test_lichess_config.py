@@ -36,6 +36,20 @@ class RatingWindow(unittest.TestCase):
         self.assertEqual(matchmaking["opponent_max_rating"], 2600)
 
 
+class OnlineMoves(unittest.TestCase):
+    def test_openings_come_from_chessdb_and_the_lichess_cloud(self):
+        online = build()["engine"]["online_moves"]
+        self.assertTrue(online["chessdb_book"]["enabled"])
+        self.assertEqual(online["chessdb_book"]["move_quality"], "best")
+        self.assertTrue(online["lichess_cloud_analysis"]["enabled"])
+        self.assertFalse(online["lichess_opening_explorer"]["enabled"])
+
+    def test_endgames_up_to_seven_pieces_come_from_the_lichess_tablebase(self):
+        egtb = build()["engine"]["online_moves"]["online_egtb"]
+        self.assertTrue(egtb["enabled"])
+        self.assertEqual((egtb["source"], egtb["max_pieces"], egtb["min_time"]), ("lichess", 7, 5))
+
+
 class EngineOptions(unittest.TestCase):
     def test_the_bot_ponders(self):
         self.assertIs(build()["engine"]["ponder"], True)

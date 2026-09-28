@@ -56,12 +56,22 @@ def overrides(
             # tempo pensado conta como gasto e, se já cobriu o orçamento, o lance sai na hora.
             "ponder": True,
             "polyglot": {"enabled": False},
-            # Nada de lances vindos de fora: o resultado tem de medir a nossa engine.
+            # Aberturas e finais vêm de fora (D19, decisão do dono pelos 3000 no Lichess): lances
+            # de livro saem na hora e poupam o relógio; finais de até 7 peças saem perfeitos. As
+            # listas (CCRL, gauntlet) continuam medindo só a engine, com os livros delas.
             "online_moves": {
-                "chessdb_book": {"enabled": False},
-                "lichess_cloud_analysis": {"enabled": False},
+                "max_out_of_book_moves": 10,
+                "chessdb_book": {"enabled": True, "min_time": 20, "move_quality": "best"},
+                "lichess_cloud_analysis": {"enabled": True, "min_time": 20, "move_quality": "best"},
+                # Escolhas de humanos, não o melhor lance.
                 "lichess_opening_explorer": {"enabled": False},
-                "online_egtb": {"enabled": False},
+                "online_egtb": {
+                    "enabled": True,
+                    "min_time": 5,
+                    "max_pieces": 7,
+                    "source": "lichess",
+                    "move_quality": "best",
+                },
             },
             "lichess_bot_tbs": {
                 "syzygy": {"enabled": False},
