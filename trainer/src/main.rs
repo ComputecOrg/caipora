@@ -1,7 +1,9 @@
 //! Treino da rede do Caipora com o `bullet` (github.com/jw1912/bullet, licença MIT), na GPU.
 //!
 //! A arquitetura e a quantização precisam bater com `src/nnue.rs` da engine:
-//! (768 → 256)×2 → 1, SCReLU, QA = 255, QB = 64, escala 400.
+//! (768 → HIDDEN)×2 → 1, SCReLU, QA = 255, QB = 64, escala 400. HIDDEN vem da variável de
+//! ambiente `CAIPORA_HIDDEN` (padrão 256), para experimentar redes maiores; a engine precisa ser
+//! compilada com o mesmo `HIDDEN`.
 //!
 //! Uso:
 //! `caipora-trainer <dados.bin> <id> <superbatches> [lotes por superbatch] [wdl] [lr inicial]`
@@ -26,7 +28,7 @@ use bullet::{
     value::{ValueTrainerBuilder, loader},
 };
 
-const HIDDEN: usize = 256;
+const DEFAULT_HIDDEN: usize = 256;
 const SCALE: i32 = 400;
 const QA: i16 = 255;
 const QB: i16 = 64;
@@ -36,6 +38,10 @@ fn main() {
     let usage = "uso: caipora-trainer <dados.bin> <id> <superbatches> [lotes] [wdl] [lr]
                  ou:  caipora-trainer eval <checkpoint> <FEN>...";
 
+    let hidden: usize = std::env::var("CAIPORA_HIDDEN").map_or(DEFAULT_HIDDEN, |v| {
+        v.parse().expect("CAIPORA_HIDDEN precisa ser um número")
+    });
+    println!("camada oculta: {hidden}");
     let mut trainer = ValueTrainerBuilder::default()
         .dual_perspective()
         .optimiser(AdamW)
@@ -48,8 +54,8 @@ fn main() {
         ])
         .loss_fn(|output, target| output.sigmoid().squared_error(target))
         .build(|builder, stm, ntm| {
-            let l0 = builder.new_affine("l0", 768, HIDDEN);
-            let l1 = builder.new_affine("l1", 2 * HIDDEN, 1);
+            let l0 = builder.new_affine("l0", 768, hidden);
+            let l1 = builder.new_affine("l1", 2 * hidden, 1);
             let stm_hidden = l0.forward(stm).screlu();
             let ntm_hidden = l0.forward(ntm).screlu();
             l1.forward(stm_hidden.concat(ntm_hidden))

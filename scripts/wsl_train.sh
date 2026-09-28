@@ -4,7 +4,7 @@
 #
 # Do Git Bash:
 #   MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_train.sh \
-#     <prefixo> <id> <épocas> [wdl] [lr]
+#     <prefixo> <id> <épocas> [wdl] [lr] [camada oculta, padrão 256]
 # - <prefixo>: usa datagen/<prefixo>-*.txt e datagen/<prefixo>-*.txt.gz (trazidos da AWS).
 # - Cada superbatch do treino é uma época (uma passada pelos dados).
 # - A rede final vai para nets/<id>.nnue; os checkpoints ficam em ~/nnue/<id>/checkpoints.
@@ -12,6 +12,8 @@
 #   nets/<id>-validation.txt, para `caipora validate` medir a perda em posições não vistas.
 set -eu
 PREFIX=$1; ID=$2; EPOCHS=$3; WDL=${4:-0.5}; LR=${5:-0.001}
+# A engine precisa ser compilada com o mesmo HIDDEN (src/nnue.rs) para usar a rede.
+export CAIPORA_HIDDEN=${6:-256}
 REPO=/mnt/c/Projetos/ChessAI
 UTILS=$HOME/bullet/target/release/bullet-utils
 export PATH="$HOME/.cargo/bin:/usr/bin:/bin"
@@ -63,10 +65,10 @@ else
 fi
 POSITIONS=$(( $(stat -c %s data.bin) / 32 ))
 BATCHES=$(( POSITIONS / 16384 ))
-echo "total: $POSITIONS posições, $BATCHES lotes por época, $EPOCHS épocas, wdl $WDL, lr $LR"
+echo "total: $POSITIONS posições, $BATCHES lotes por época, $EPOCHS épocas, wdl $WDL, lr $LR, oculta $CAIPORA_HIDDEN"
 
 "$CARGO_TARGET_DIR/release/caipora-trainer" data.bin "$ID" "$EPOCHS" "$BATCHES" "$WDL" "$LR" \
-  2>&1 | sed -u 's/\x1b\[[0-9;]*m//g' | grep --line-buffered -E "running loss|Saved|Total Training"
+  2>&1 | sed -u 's/\x1b\[[0-9;]*m//g' | grep --line-buffered -E "camada oculta|running loss|Saved|Total Training"
 mkdir -p "$REPO/nets"
 cp "checkpoints/$ID-$EPOCHS/quantised.bin" "$REPO/nets/$ID.nnue"
 cp validation.txt "$REPO/nets/$ID-validation.txt"
