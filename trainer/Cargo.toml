@@ -11,3 +11,5 @@ publish = false
 
 [dependencies]
 bullet = { git = "https://github.com/jw1912/bullet", rev = "c004ebf04025edf91c6ccac47e72d561062a46b5", package = "bullet_lib", features = ["cuda"] }
+# Leitura dos binpacks do Stockfish (dados do Lc0, ODbL; D20); a mesma versão que o bullet usa.
+sfbinpack = "0.6.4"

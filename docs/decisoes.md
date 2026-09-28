@@ -271,3 +271,22 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** o bot depende de serviços de fora (chessdb e Lichess); se caírem,
   o lichess-bot volta para a engine depois de 2 tentativas. As aberturas deixam de mostrar o
   estilo da engine. Voltar é um parâmetro no `scripts/lichess_config.py`.
+
+## D20 — 28/09/2026 — Dados do Lc0 liberados para treinar a rede (substitui a D2)
+
+- **Decisão (do dono, pela meta de 3000 no Lichess):** as redes podem ser treinadas com os dados
+  de treino do Lc0 (Leela Chess Zero), licença ODbL, nos binpacks publicados pela comunidade do
+  Stockfish (Kaggle, `linrock/*`). A origem é declarada no README, no `AI_USAGE.md` e na ruling de
+  cada rede. Continua proibido usar redes de terceiros (pesos ou ponto de partida). A g4 sai só
+  desses dados.
+- **Por quê:** partidas do Lc0 são muito mais fortes e bem avaliadas que o nosso self-play a 5000
+  nós; é o que o Stockfish usa desde 2022 e o que levou a Coda a 3633. Gerar dados próprios em
+  volume parecido custaria muito mais AWS.
+- **O que se perde:** a norma de prestígio "dados 100% próprios"; no TCEC os dados contam como
+  "OTHER" (já estaríamos na categoria de IA); parte da comunidade chama o atalho de "laundering".
+  A CCRL lista engines assim (ex.: Cinder).
+- **Escala:** as pontuações dos binpacks não estão em centipeões nossos. A calibração com a g3
+  (200 mil posições) ficou entre 0,2 e 0,66 conforme o método (correlação 0,60); a escala da
+  engine para a rede nova será escolhida em partidas, não na conta.
+- **Custo se estiver errada:** reputação na comunidade; voltar exige retreinar só com dados
+  próprios (os geradores e o pipeline continuam prontos).

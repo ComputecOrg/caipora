@@ -11,10 +11,12 @@ First playable version (0.1.0):
 - Alpha-beta search: iterative deepening, aspiration windows, PVS, check extension, quiescence
   search, transposition table, TT move and MVV-LVA ordering, draw detection (repetition,
   fifty-move rule, insufficient material), soft/hard time management.
-- Evaluation: material and piece-square terms generated from our own formulas, tapered by game
-  phase. It will be tuned on Caipora's own games and later replaced by an NNUE trained only on
-  self-play data.
-- UCI options: `Hash`, `Threads` (1), `Move Overhead`, `UCI_Chess960`, `Clear Hash`.
+- Evaluation: NNUE, (768 → 512)×2 → 1 with SCReLU, embedded in the binary. Networks up to g3
+  were trained only on Caipora's self-play; from g4 on, Leela Chess Zero training data (ODbL)
+  may also be used. See [AI_USAGE.md](AI_USAGE.md).
+- Lazy SMP (shared lock-free transposition table) and pondering.
+- UCI options: `Hash`, `Threads` (up to 256), `Move Overhead`, `UCI_Chess960`, `Clear Hash`,
+  `EvalFile`, `Ponder`.
   Extra commands: `bench [depth]`, `go perft N`, `d`, `eval`.
 
 ## AI usage
