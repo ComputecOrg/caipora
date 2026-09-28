@@ -56,6 +56,13 @@ pub fn compute_limits(params: &GoParams, side: Color, move_overhead: Duration) -
         let divisor = params.movestogo.map_or(20, |moves| moves.max(1));
         let hard = (available / 4).max(1);
         let soft = (available / divisor + increment.unwrap_or(0) / 2).clamp(1, hard);
+        // No ponder, os acertos devolvem tempo (a busca joga na hora quando o ponder já cobriu o
+        // limite suave); por isso ele cresce 25%. Ideia do Stockfish.
+        let soft = if params.ponder {
+            (soft + soft / 4).min(hard)
+        } else {
+            soft
+        };
         limits.soft_time = ms(soft);
         limits.hard_time = ms(hard);
     }
@@ -107,6 +114,20 @@ mod tests {
         let limits = compute_limits(&params, Color::White, Duration::from_millis(10));
         assert_eq!(limits.hard_time, ms(990));
         assert_eq!(limits.soft_time, ms(990));
+    }
+
+    #[test]
+    fn a_ponder_search_gets_a_quarter_more_time() {
+        // Com ponder, os acertos devolvem tempo; o limite suave cresce 25% (ideia do Stockfish).
+        let params = GoParams {
+            wtime: Some(60_000),
+            winc: Some(1_000),
+            ponder: true,
+            ..GoParams::default()
+        };
+        let limits = compute_limits(&params, Color::White, Duration::from_millis(10));
+        assert_eq!(limits.soft_time, ms(3_499 * 5 / 4));
+        assert_eq!(limits.hard_time, ms(14_997));
     }
 
     #[test]

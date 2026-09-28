@@ -428,7 +428,7 @@ impl Searcher {
                 // Enquanto pondera, sempre aprofunda: quem encerra é o `ponderhit` ou o `stop`.
                 let deepen = state
                     .clock()
-                    .is_none_or(|elapsed| should_start_iteration(elapsed, limits));
+                    .is_none_or(|_| should_start_iteration(state.start.elapsed(), limits));
                 if !deepen || state.stop.load(Ordering::Relaxed) {
                     break;
                 }
@@ -498,6 +498,7 @@ fn new_state<'a>(
         awaiting_ponderhit: pondering.load(Ordering::Relaxed),
         limits,
         start: Instant::now(),
+        clock_start: Instant::now(),
         nodes: 0,
         poll_counter: 0,
         seldepth: 0,
@@ -527,8 +528,11 @@ struct SearchState<'a> {
     pondering: &'a AtomicBool,
     awaiting_ponderhit: bool,
     limits: &'a Limits,
-    /// Começo da busca ou, se ela começou pondering, o momento em que viu o `ponderhit`.
+    /// Começo da busca (do `go`, mesmo que pondering): mede o limite suave.
     start: Instant,
+    /// Quando o nosso relógio começou a correr: o começo da busca ou o `ponderhit`. Mede o limite
+    /// duro.
+    clock_start: Instant,
     nodes: u64,
     poll_counter: u32,
     seldepth: usize,
@@ -591,17 +595,26 @@ impl SearchState<'_> {
         }
     }
 
-    /// Tempo gasto contra o nosso relógio; `None` enquanto pondera, porque o relógio que corre é o
-    /// do adversário. Na primeira consulta depois do `ponderhit`, o nosso começa a contar.
+    /// Tempo gasto no nosso relógio, para o limite duro; `None` enquanto pondera, porque o relógio
+    /// que corre é o do adversário. Na primeira consulta depois do `ponderhit` o nosso começa a
+    /// contar, e o tempo pensado no ponder conta como gasto para o limite suave (a resposta veio
+    /// como previsto): se ele já passou, joga na hora.
     fn clock(&mut self) -> Option<Duration> {
         if self.awaiting_ponderhit {
             if self.pondering.load(Ordering::Relaxed) {
                 return None;
             }
             self.awaiting_ponderhit = false;
-            self.start = Instant::now();
+            self.clock_start = Instant::now();
+            if self
+                .limits
+                .soft_time
+                .is_some_and(|soft| self.start.elapsed() >= soft)
+            {
+                self.stopped = true;
+            }
         }
-        Some(self.start.elapsed())
+        Some(self.clock_start.elapsed())
     }
 
     /// A primeira iteração nunca é interrompida; depois, para por `stop`, limite de nós ou tempo
@@ -1303,6 +1316,52 @@ mod tests {
         let result = run(crate::position::STARTPOS_FEN, nodes);
         assert!(result.nodes <= 22_000, "nós {}", result.nodes);
         assert!(result.best_move.is_some());
+    }
+
+    /// Liga o sinal de ponder do `searcher`, como o `go ponder`.
+    fn start_pondering(searcher: &Searcher) -> Arc<AtomicBool> {
+        let pondering = searcher.ponder_signal();
+        pondering.store(true, Ordering::Relaxed);
+        pondering
+    }
+
+    #[test]
+    fn ponderhit_after_the_budget_is_spent_plays_at_once() {
+        // O ponder durou mais que o limite suave: o tempo pensado conta como gasto e, no
+        // ponderhit, a busca para sem esperar o limite duro (medido a partir do ponderhit).
+        let limits = Limits {
+            soft_time: Some(Duration::from_millis(50)),
+            hard_time: Some(Duration::from_millis(10_000)),
+            ..Limits::default()
+        };
+        let mut searcher = Searcher::new(16);
+        let pondering = start_pondering(&searcher);
+        let stop = AtomicBool::new(false);
+        let mut state = searcher.start(&Position::startpos(), &[], &limits, &stop);
+        state.root_depth = 2;
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!(0..2048).any(|_| state.should_stop()), "parou pondering");
+        pondering.store(false, Ordering::Relaxed);
+        assert!(
+            (0..2048).any(|_| state.should_stop()),
+            "não parou no ponderhit"
+        );
+    }
+
+    #[test]
+    fn a_short_ponder_keeps_searching_on_our_clock() {
+        let limits = Limits {
+            soft_time: Some(Duration::from_millis(5_000)),
+            hard_time: Some(Duration::from_millis(10_000)),
+            ..Limits::default()
+        };
+        let mut searcher = Searcher::new(16);
+        let pondering = start_pondering(&searcher);
+        let stop = AtomicBool::new(false);
+        let mut state = searcher.start(&Position::startpos(), &[], &limits, &stop);
+        state.root_depth = 2;
+        pondering.store(false, Ordering::Relaxed);
+        assert!(!(0..2048).any(|_| state.should_stop()));
     }
 
     #[test]
