@@ -36,6 +36,11 @@ class RatingWindow(unittest.TestCase):
         self.assertEqual(matchmaking["opponent_max_rating"], 2600)
 
 
+class Matchmaking(unittest.TestCase):
+    def test_the_bot_challenges_again_after_one_idle_minute(self):
+        self.assertEqual(build("--matchmaking")["matchmaking"]["challenge_timeout"], 1)
+
+
 class OnlineMoves(unittest.TestCase):
     def test_openings_come_from_chessdb_and_the_lichess_cloud(self):
         online = build()["engine"]["online_moves"]

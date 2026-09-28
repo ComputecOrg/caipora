@@ -96,7 +96,9 @@ def overrides(
         "matchmaking": {
             "allow_matchmaking": matchmaking,
             "challenge_variant": "standard",
-            "challenge_timeout": 10,
+            # Minutos parado antes de desafiar de novo (o mínimo é 1). Com 10, metade do dia ficava
+            # ocioso; com 1, o bot chega perto do teto do Lichess de 100 partidas entre bots por dia.
+            "challenge_timeout": 1,
             "challenge_initial_time": [180, 300],
             "challenge_increment": [2, 3],
             # Limites absolutos; com --rating-difference, só valem enquanto o bot não tem rating

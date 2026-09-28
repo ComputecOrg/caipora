@@ -50,8 +50,10 @@ log: nenhuma derrota por tempo, nenhum lance ilegal, nenhuma queda. Motivos para
 venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py --engine C:\Projetos\ChessAI\target\release\caipora.exe --rated --matchmaking
 ```
 
-O matchmaking desafia bots com rating até 250 pontos de diferença, a cada 10 minutos parado,
-em 3+2 ou 5+3.
+O matchmaking desafia bots em 3+2 ou 5+3 depois de 1 minuto parado (era 10: com partidas de
+~10 min, metade do dia ficava ocioso). Com 1 minuto o bot chega perto do teto do Lichess de 100
+partidas entre bots por dia; partidas contra humanos não contam no teto. Duas partidas ao mesmo
+tempo não compensam: com 2 vCPUs, cada uma jogaria com metade da máquina.
 
 ## Rede neural e faixa de adversários
 
