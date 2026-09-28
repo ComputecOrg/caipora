@@ -234,3 +234,25 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   a lentidão.
 - **Custo se estiver errada:** alguns Elo a menos que a (a), dentro do erro; voltar é reverter o
   commit da variante (b).
+
+## D18 — 28/09/2026 — A g3 entra com camada oculta de 512
+
+- **Decisão:** `net/caipora-g3.nnue` substitui a g2 dentro do executável, e a arquitetura passa
+  a (768 → 512)×2 → 1 (`HIDDEN` = 512 na engine; 512 também vira o padrão do treinador). A g2
+  sai do repositório (fica no histórico).
+- **Procedência:**
+  - dados: 429 milhões de posições do `caipora datagen` jogadas e pontuadas pela g2, 5000 nós
+    por lance, 3 máquinas c7a.16xlarge (192 geradores, binário 3fbb048, sementes 50001–50064,
+    50101–50164, 50201–50264);
+  - treino: bullet, wdl 0, 10 épocas, lr 0,001 com cosseno, época 10; a 256 e a 512 treinaram
+    sobre o mesmo `data.bin`;
+  - validação (4,3 milhões de posições fora do treino): g2 0,002618; g3-256 0,001868; **g3-512
+    0,001756**.
+- **Por quê:** SPRTs de relógio (8+0.08) na AWS, binário contra binário:
+  - g3-256 contra a g2: **+162 ± 35** em 234 partidas;
+  - g3-512 contra a g3-256: **+30,5 ± 15,0** em 881 partidas, já pagando os ~10% de nós/s a
+    menos da rede maior (bench: ~926 mil contra ~1,03 milhão);
+  - gauntlet da g3-256 contra Stash 30/33/37 (200 partidas cada): ~3215 ± 23 CCRL Blitz, com a
+    g2 no mesmo gauntlet em 3094 ± 26 (régua calibrada).
+- **Custo se estiver errada:** a rede e a engine ficam amarradas ao tamanho 512: redes antigas de
+  256 não carregam mais sem recompilar. Voltar é reverter o commit (rede e `HIDDEN` juntos).

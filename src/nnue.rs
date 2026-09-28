@@ -19,7 +19,7 @@ use crate::position::{CastleSide, Position, castle_destinations};
 use crate::types::{Color, Piece, Square};
 
 /// Neurônios da camada oculta.
-pub const HIDDEN: usize = 256;
+pub const HIDDEN: usize = 512;
 /// Quantização da camada oculta: 1,0 vira `QA`.
 const QA: i32 = 255;
 /// Quantização dos pesos de saída.
@@ -33,7 +33,7 @@ pub const NETWORK_BYTES: usize = (2 * NETWORK_VALUES).div_ceil(64) * 64;
 
 /// Rede que vai dentro do executável (D14): treinada só com partidas do próprio Caipora (D2).
 static EMBEDDED: LazyLock<Arc<Network>> = LazyLock::new(|| {
-    let bytes = include_bytes!("../net/caipora-g2.nnue");
+    let bytes = include_bytes!("../net/caipora-g3.nnue");
     Arc::new(Network::from_bytes(bytes).expect("a rede embutida tem o formato certo"))
 });
 

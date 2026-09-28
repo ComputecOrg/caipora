@@ -3,9 +3,11 @@
 Tudo com dados do próprio Caipora (D2). A arquitetura é a mesma em três lugares, que precisam
 bater: `src/nnue.rs` (inferência), `trainer/src/main.rs` (treino) e o arquivo da rede.
 
-- Arquitetura: (768 → 256)×2 → 1, SCReLU.
+- Arquitetura: (768 → 512)×2 → 1, SCReLU (até a g2, 256; a g3 passou a 512, D18).
 - Quantização: QA = 255, QB = 64, escala 400.
-- Arquivo: 394.816 bytes.
+- Arquivo: 789.568 bytes (com 256, 394.816).
+- O tamanho da camada oculta é `HIDDEN` em `src/nnue.rs` e `CAIPORA_HIDDEN` no treinador
+  (6º argumento do `wsl_train.sh`); uma rede só carrega numa engine compilada com o mesmo valor.
 
 ## 1. Gerar dados (Windows, um processo por núcleo livre)
 
@@ -79,7 +81,7 @@ caipora-trainer g1.bin caipora-g1 <superbatches> [lotes por superbatch] [wdl] [l
 
 ## Rede embutida
 
-`net/caipora-g2.nnue` vai dentro do executável (D14, D16) e é a avaliação padrão. Pela opção
+`net/caipora-g3.nnue` vai dentro do executável (D14, D16, D18) e é a avaliação padrão. Pela opção
 `EvalFile`:
 
 | Valor | Avaliação |

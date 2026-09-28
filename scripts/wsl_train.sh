@@ -4,7 +4,7 @@
 #
 # Do Git Bash:
 #   MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_train.sh \
-#     <prefixo> <id> <épocas> [wdl] [lr] [camada oculta, padrão 256]
+#     <prefixo> <id> <épocas> [wdl] [lr] [camada oculta, padrão 512]
 # - <prefixo>: usa datagen/<prefixo>-*.txt e datagen/<prefixo>-*.txt.gz (trazidos da AWS).
 # - Cada superbatch do treino é uma época (uma passada pelos dados).
 # - A rede final vai para nets/<id>.nnue; os checkpoints ficam em ~/nnue/<id>/checkpoints.
@@ -21,7 +21,7 @@ if [ -z "${CAIPORA_TRAIN_SCOPE:-}" ] && command -v systemd-run > /dev/null; then
 fi
 PREFIX=$1; ID=$2; EPOCHS=$3; WDL=${4:-0.5}; LR=${5:-0.001}
 # A engine precisa ser compilada com o mesmo HIDDEN (src/nnue.rs) para usar a rede.
-export CAIPORA_HIDDEN=${6:-256}
+export CAIPORA_HIDDEN=${6:-512}
 REPO=/mnt/c/Projetos/ChessAI
 UTILS=$HOME/bullet/target/release/bullet-utils
 export PATH="$HOME/.cargo/bin:/usr/bin:/bin"
