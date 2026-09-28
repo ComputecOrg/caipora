@@ -37,6 +37,9 @@ class RatingWindow(unittest.TestCase):
 
 
 class EngineOptions(unittest.TestCase):
+    def test_the_bot_ponders(self):
+        self.assertIs(build()["engine"]["ponder"], True)
+
     def test_uci_options_replace_the_defaults(self):
         self.assertEqual(
             build("--threads", "2")["engine"]["uci_options"],

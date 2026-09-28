@@ -13,7 +13,7 @@ use crate::movegen::{divide, generate_legal};
 use crate::moves::{Move, MoveKind};
 use crate::nnue::Network;
 use crate::position::Position;
-use crate::search::{IterationInfo, Searcher, uci_score};
+use crate::search::{IterationInfo, SearchResult, Searcher, uci_score};
 use crate::timeman::{GoParams, compute_limits};
 use crate::types::Square;
 
@@ -55,21 +55,22 @@ pub struct Engine {
     searcher: Option<Searcher>,
     search_thread: Option<JoinHandle<Searcher>>,
     stop: Arc<AtomicBool>,
+    /// Sinal de ponder do `Searcher`: ligado no `go ponder`, desligado no `ponderhit`.
+    pondering: Arc<AtomicBool>,
     out: Output,
 }
 
 impl Engine {
     pub fn new(out: Output) -> Engine {
+        let mut searcher = Searcher::new(DEFAULT_HASH_MB);
+        searcher.set_network(Some(crate::nnue::embedded()));
         Engine {
             position: Position::startpos(),
             history: Vec::new(),
             chess960: false,
             move_overhead: Duration::from_millis(DEFAULT_MOVE_OVERHEAD_MS),
-            searcher: Some({
-                let mut searcher = Searcher::new(DEFAULT_HASH_MB);
-                searcher.set_network(Some(crate::nnue::embedded()));
-                searcher
-            }),
+            pondering: searcher.ponder_signal(),
+            searcher: Some(searcher),
             search_thread: None,
             stop: Arc::new(AtomicBool::new(false)),
             out,
@@ -96,7 +97,8 @@ impl Engine {
             "position" => self.set_position(args),
             "go" => self.go(args),
             "stop" => self.finish_search(),
-            "ponderhit" => {}
+            // O lance esperado veio: a busca em andamento segue, agora no nosso relógio.
+            "ponderhit" => self.pondering.store(false, Ordering::Relaxed),
             "quit" => {
                 self.finish_search();
                 return false;
@@ -160,6 +162,7 @@ impl Engine {
             "option name UCI_Chess960 type check default false".to_string(),
             "option name Clear Hash type button".to_string(),
             "option name EvalFile type string default <embedded>".to_string(),
+            "option name Ponder type check default false".to_string(),
             "uciok".to_string(),
         ];
         for line in lines {
@@ -199,6 +202,8 @@ impl Engine {
                 self.searcher_mut().clear();
             }
             "evalfile" => self.load_network(&value),
+            // Só avisa que a GUI pode mandar `go ponder`; quem liga o ponder é o próprio `go`.
+            "ponder" => {}
             _ => self
                 .out
                 .line(&format!("info string unknown option: {name}")),
@@ -288,6 +293,8 @@ impl Engine {
         let out = self.out.clone();
         self.stop.store(false, Ordering::Relaxed);
         let stop = Arc::clone(&self.stop);
+        self.pondering.store(params.ponder, Ordering::Relaxed);
+        let pondering = Arc::clone(&self.pondering);
         let handle = std::thread::Builder::new()
             .name("search".to_string())
             .stack_size(SEARCH_STACK_BYTES)
@@ -295,14 +302,14 @@ impl Engine {
                 let result = searcher.search(&pos, &history, &limits, &stop, &mut |info| {
                     out.line(&info_line(info, chess960));
                 });
-                // Em `go infinite` o bestmove só pode sair depois do `stop`.
-                while params.infinite && !stop.load(Ordering::Relaxed) {
+                // Em `go infinite` o bestmove só pode sair depois do `stop`; no ponder, depois do
+                // `ponderhit` ou do `stop`, mesmo que a busca tenha acabado antes (mate, limite).
+                while (params.infinite || pondering.load(Ordering::Relaxed))
+                    && !stop.load(Ordering::Relaxed)
+                {
                     std::thread::sleep(Duration::from_millis(1));
                 }
-                let best = result
-                    .best_move
-                    .map_or_else(|| "0000".to_string(), |m| m.to_uci(chess960));
-                out.line(&format!("bestmove {best}"));
+                out.line(&bestmove_line(&result, chess960));
                 searcher
             })
             .expect("não conseguiu criar a thread de busca");
@@ -368,7 +375,7 @@ pub fn run(input: impl BufRead, out: Output) {
 }
 
 /// Parâmetros do `go`. Tempos negativos (algumas GUIs mandam quando o relógio estoura) viram 0;
-/// `ponder`, `searchmoves` e `mate` são ignorados.
+/// `searchmoves` e `mate` são ignorados.
 pub fn parse_go(tokens: &[&str]) -> GoParams {
     let mut params = GoParams::default();
     let mut i = 0;
@@ -416,6 +423,10 @@ pub fn parse_go(tokens: &[&str]) -> GoParams {
                 params.infinite = true;
                 false
             }
+            "ponder" => {
+                params.ponder = true;
+                false
+            }
             _ => false,
         };
         i += if consumed { 2 } else { 1 };
@@ -450,6 +461,20 @@ fn info_line(info: &IterationInfo, chess960: bool) -> String {
         info.hashfull,
         pv.join(" ")
     )
+}
+
+/// `bestmove X`, com `ponder Y` quando a variante principal traz a resposta esperada.
+fn bestmove_line(result: &SearchResult, chess960: bool) -> String {
+    let Some(best) = result.best_move else {
+        return "bestmove 0000".to_string();
+    };
+    let mut line = format!("bestmove {}", best.to_uci(chess960));
+    if let [first, reply, ..] = result.pv.as_slice()
+        && *first == best
+    {
+        line.push_str(&format!(" ponder {}", reply.to_uci(chess960)));
+    }
+    line
 }
 
 /// Linha final do bench, no formato que o OpenBench procura (`N nodes M nps`).
@@ -497,11 +522,22 @@ mod tests {
         }
     }
 
-    fn bestmove(buffer: &Buffer) -> String {
+    /// Lance e, se houver, o lance de ponder da última linha (`bestmove X [ponder Y]`).
+    fn last_bestmove(buffer: &Buffer) -> (String, Option<String>) {
         let lines = buffer.lines();
         let last = lines.last().expect("sem saída");
-        assert!(last.starts_with("bestmove "), "última linha: {last}");
-        last["bestmove ".len()..].to_string()
+        let tokens: Vec<&str> = last.split_whitespace().collect();
+        assert_eq!(tokens.first(), Some(&"bestmove"), "última linha: {last}");
+        let ponder = match tokens.get(2) {
+            Some(&"ponder") => Some(tokens[3].to_string()),
+            None => None,
+            Some(other) => panic!("depois do lance veio {other}"),
+        };
+        (tokens[1].to_string(), ponder)
+    }
+
+    fn bestmove(buffer: &Buffer) -> String {
+        last_bestmove(buffer).0
     }
 
     #[test]
@@ -518,6 +554,7 @@ mod tests {
             "option name UCI_Chess960 type check default false",
             "option name Clear Hash type button",
             "option name EvalFile type string default <embedded>",
+            "option name Ponder type check default false",
         ] {
             assert!(text.contains(option), "falta {option}");
         }
@@ -585,6 +622,70 @@ mod tests {
             .map(|m| m.to_uci(false))
             .collect();
         assert!(legal.contains(&best), "{best}");
+    }
+
+    #[test]
+    fn go_ponder_waits_for_ponderhit_and_then_plays_on_our_clock() {
+        let (mut engine, out) = engine();
+        send(
+            &mut engine,
+            &[
+                "setoption name Ponder value true",
+                "position startpos moves e2e4 e7e5",
+                "go ponder wtime 2000 btime 2000 winc 0 binc 0",
+            ],
+        );
+        // Bem mais que o tempo de um lance com 2 s no relógio: pondering, não sai bestmove.
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(
+            !out.text().contains("bestmove"),
+            "bestmove antes do ponderhit"
+        );
+        assert!(!out.text().contains("unknown option"));
+        let hit = Instant::now();
+        send(&mut engine, &["ponderhit"]);
+        engine.wait_for_search();
+        assert!(
+            hit.elapsed() < Duration::from_millis(1_000),
+            "{:?}",
+            hit.elapsed()
+        );
+        let (best, _) = last_bestmove(&out);
+        assert!(!best.is_empty());
+    }
+
+    #[test]
+    fn stop_ends_a_ponder_search() {
+        let (mut engine, out) = engine();
+        send(
+            &mut engine,
+            &["position startpos", "go ponder wtime 60000 btime 60000"],
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        send(&mut engine, &["stop"]);
+        engine.wait_for_search();
+        assert!(!bestmove(&out).is_empty());
+    }
+
+    #[test]
+    fn bestmove_names_the_expected_reply_to_ponder_on() {
+        let (mut engine, out) = engine();
+        send(&mut engine, &["position startpos moves d2d4", "go depth 6"]);
+        engine.wait_for_search();
+        let (best, ponder) = last_bestmove(&out);
+        let ponder = ponder.expect("sem lance de ponder");
+        send(
+            &mut engine,
+            &[&format!("position startpos moves d2d4 {best}")],
+        );
+        let legal: Vec<String> = generate_legal(engine.position())
+            .iter()
+            .map(|mv| mv.to_uci(false))
+            .collect();
+        assert!(
+            legal.contains(&ponder),
+            "{ponder} não é legal depois de {best}"
+        );
     }
 
     #[test]
