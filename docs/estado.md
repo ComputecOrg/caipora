@@ -1,5 +1,24 @@
 # Estado do Caipora
 
+## v3.3 — 28/09/2026 (PRs #47 e #50: ponder e rede g3 com 512)
+
+- **Força estimada: ~3242 ± 23 CCRL Blitz** com 1 thread (+~135 sobre a v3.2). Gauntlet na AWS a
+  8+0.08, Hash 16, 200 partidas por adversário, 600 partidas, todas com terminação normal
+  (`tools/aws-sprt/gauntlet-g3-512/`):
+
+  | Adversário (CCRL Blitz) | v3.3 (g3-512) | g3-256 | v3.2 (g2) |
+  |---|---|---|---|
+  | Stash 30 (3153) | 63,5% | 60,8% | 45,2% |
+  | Stash 33 (3273) | 44,2% | 41,2% | 24,5% |
+  | Stash 37 (3419) | 26,8% | 22,2% | 12,0% |
+
+  A g2 repetiu 3094 ± 26 no gauntlet da g3-256 (3108 na véspera): régua estável.
+- **O que entrou:**
+  - rede g3 (D18): 429 milhões de posições jogadas pela g2, camada oculta de 512. SPRTs de
+    relógio: g3-256 +162 ± 35 sobre a g2; g3-512 +30,5 ± 15,0 sobre a g3-256;
+  - ponder (D17): +84 ± 18 contra sem ponder, só no bot (as listas jogam sem ponder).
+- **Bench:** 2654286.
+
 ## v3.2 — 27/09/2026 (PRs #38, #39 e #45: Lazy SMP e rede g2)
 
 - **Força estimada: ~3108 ± 24 CCRL Blitz** com 1 thread (+~230 sobre a v3.1). Gauntlet na AWS
@@ -123,8 +142,8 @@
 
 1. **Tempo na abertura:** o bot gasta 46% do tempo base nos lances 2 a 11 (adversários: 32%);
    testar gastar menos nos primeiros lances, com SPRT de relógio.
-2. **Terceira geração de dados (g3)**, jogada pela g2; com mais dados, testar uma camada oculta
-   maior que 256.
+2. **Quarta geração de dados (g4)**, jogada pela g3: mais posições e talvez mais nós por lance;
+   testar camada oculta maior que 512 ou king buckets.
 3. **LMR guiada pelo histórico** (branch `feat/history-lmr`): retestar em cima da main.
 4. **Ferramentas:**
    - `caipora validate`: perda de validação;
