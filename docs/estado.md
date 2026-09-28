@@ -20,7 +20,9 @@
     partidas;
   - TT sem trava (entradas atômicas), pré-requisito do Lazy SMP.
 - **Bench:** 2893409.
-- **Bot:** 2 threads (a VPS tem 2 vCPUs), rated, contra bots de 2000 a 2600.
+- **Bot:** 2 threads (a VPS tem 2 vCPUs), rated, adversários a até 300 pontos do rating dele,
+  **com ponder** (D17): +84 ± 18 contra o Caipora sem ponder, pelo python-chess como no
+  lichess-bot. O ponder não muda a força nas listas (CCRL e gauntlet jogam sem ponder).
 
 ## v3.1 — 27/09/2026 (PRs #10, #15, #16: busca da fase 3 com a rede)
 
@@ -119,14 +121,12 @@
 - Mudança de tempo: SPRT de relógio a 8+0.08.
 - Branches empilhados (D10).
 
-1. **Ponder** (pensar no tempo do adversário): o bot joga uma partida por vez e deixa os 2
-   núcleos parados enquanto o adversário pensa; a engine ainda ignora `go ponder`.
+1. **Tempo na abertura:** o bot gasta 46% do tempo base nos lances 2 a 11 (adversários: 32%);
+   testar gastar menos nos primeiros lances, com SPRT de relógio.
 2. **Terceira geração de dados (g3)**, jogada pela g2; com mais dados, testar uma camada oculta
    maior que 256.
 3. **LMR guiada pelo histórico** (branch `feat/history-lmr`): retestar em cima da main.
-4. **4 threads no bot:** medir 4 contra 2 na AWS antes de pensar em VPS maior (nos EUA a
-   Hetzner ficou cara em jun/2026; na Europa um CPX32 cabe no orçamento e fica perto do Lichess).
-5. **Ferramentas:**
+4. **Ferramentas:**
    - `caipora validate`: perda de validação;
    - `caipora-crash.log`: registro de quedas;
    - `scripts/wsl_train.sh`: treino com um comando.
