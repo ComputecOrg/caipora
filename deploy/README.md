@@ -41,11 +41,13 @@ A rede vai dentro do executável (D14): não há arquivo `.nnue` para copiar.
 ```bash
 scp scripts/lichess_config.py $S:/opt/caipora/
 ssh $S 'cd /opt/caipora/lichess-bot && runuser -u caipora -- venv/bin/python /opt/caipora/lichess_config.py \
-  --engine /opt/caipora/lichess-bot/engines/caipora-<commit> --matchmaking --move-overhead 1000'
+  --engine /opt/caipora/lichess-bot/engines/caipora-<commit> --threads 2 --rated --matchmaking \n  --rating-difference 300 --move-overhead 1000'
 ```
 
 O script gera o `config.yml`, valida com o carregador do próprio lichess-bot e joga duas partidas
-de fumaça no servidor.
+de fumaça no servidor. Para trocar a engine sem matar uma partida: esperar
+`https://lichess.org/api/users/status?ids=caiporaBot` dar `"playing":false`, parar o serviço, gerar
+o config e religar.
 
 ## 4. Token (o dono faz; o token não passa pelo chat nem pelo repositório)
 

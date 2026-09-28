@@ -11,7 +11,9 @@ das primeiras dezenas de partidas sem problema (ver docs/lichess.md).
 
 --eval-file passa a rede neural ao Caipora (opção UCI EvalFile). --opponent-rating MIN MAX limita
 os bots que o matchmaking desafia (padrão 2000 a 2600): em partidas casual o rating do bot fica no
-provisório de 3000, e a diferença relativa só acharia bots bem mais fortes.
+provisório de 3000, e a diferença relativa só acharia bots bem mais fortes. Com o bot já rated,
+--rating-difference N desafia bots a até N pontos do rating atual dele, que o lichess-bot recalcula
+a cada desafio; a faixa absoluta fica de reserva para quando ele ainda não tem rating.
 """
 
 import argparse
@@ -86,8 +88,8 @@ def overrides(
             "challenge_timeout": 10,
             "challenge_initial_time": [180, 300],
             "challenge_increment": [2, 3],
-            # Limites absolutos, não relativos ao rating do bot (provisório enquanto for casual);
-            # a chave opponent_rating_difference do padrão é removida em main().
+            # Limites absolutos; com --rating-difference, só valem enquanto o bot não tem rating
+            # (ver build_config).
             "opponent_min_rating": rating_range[0],
             "opponent_max_rating": rating_range[1],
             # Com --rated, os desafios que o bot envia valem rating; os recebidos podem ser dos dois.
@@ -138,7 +140,7 @@ def smoke_game(engine_path: str, uci_options: dict, chess960: bool) -> str:
         engine.quit()
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--engine", required=True, help="caminho do executável do Caipora")
     parser.add_argument("--rated", action="store_true", help="aceitar e pedir partidas rated")
@@ -156,25 +158,42 @@ def main() -> int:
         help="faixa de rating dos bots desafiados",
     )
     parser.add_argument(
+        "--rating-difference",
+        type=int,
+        metavar="N",
+        help="desafiar bots a até N pontos do rating atual do bot (em vez da faixa fixa)",
+    )
+    parser.add_argument(
         "--move-overhead",
         type=int,
         default=2000,
         help="folga por lance em ms (padrão 2000, pensado para ~200 ms de latência)",
     )
-    args = parser.parse_args()
-    rating_range = (args.opponent_rating[0], args.opponent_rating[1])
+    return parser.parse_args(argv)
 
-    with open("config.yml.default", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
+
+def build_config(config: dict, args: argparse.Namespace) -> dict:
+    """Aplica as escolhas do Caipora sobre o config.yml.default do lichess-bot."""
+    rating_range = (args.opponent_rating[0], args.opponent_rating[1])
     merge(
         config,
         overrides(args.engine, args.rated, args.matchmaking, rating_range, args.move_overhead),
     )
-    # Sem a chave o lichess-bot usa os limites absolutos; com valor vazio o validador dele falha.
-    config["matchmaking"].pop("opponent_rating_difference", None)
+    if args.rating_difference is None:
+        # Sem a chave o lichess-bot usa os limites absolutos; com valor vazio o validador falha.
+        config["matchmaking"].pop("opponent_rating_difference", None)
+    else:
+        config["matchmaking"]["opponent_rating_difference"] = args.rating_difference
     config["engine"]["uci_options"] = dict(UCI_OPTIONS)
     if args.threads > 1:
         config["engine"]["uci_options"]["Threads"] = args.threads
+    return config
+
+
+def main() -> int:
+    args = parse_args()
+    with open("config.yml.default", encoding="utf-8") as stream:
+        config = build_config(yaml.safe_load(stream), args)
     if args.eval_file:
         eval_file = os.path.abspath(args.eval_file)
         if not os.path.isfile(eval_file):
@@ -185,9 +204,12 @@ def main() -> int:
         yaml.safe_dump(config, stream, sort_keys=False, allow_unicode=True)
     print("config.yml gerado")
     print(f"opções UCI: {config['engine']['uci_options']}")
-    print(f"matchmaking: {'ligado' if args.matchmaking else 'desligado'}, bots de {rating_range[0]} a "
-          f"{rating_range[1]}, {'rated' if args.rated else 'casual'}, "
-          f"folga {args.move_overhead} ms")
+    if args.rating_difference is None:
+        opponents = f"bots de {args.opponent_rating[0]} a {args.opponent_rating[1]}"
+    else:
+        opponents = f"bots a até {args.rating_difference} pontos do rating do bot"
+    print(f"matchmaking: {'ligado' if args.matchmaking else 'desligado'}, {opponents}, "
+          f"{'rated' if args.rated else 'casual'}, folga {args.move_overhead} ms")
 
     # Validação com o próprio carregador do lichess-bot (não acessa a rede).
     sys.path.insert(0, os.getcwd())
