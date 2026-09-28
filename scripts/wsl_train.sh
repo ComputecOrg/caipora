@@ -11,6 +11,14 @@
 # - As últimas 1% das linhas de cada arquivo (as partidas mais recentes) ficam fora do treino, em
 #   nets/<id>-validation.txt, para `caipora validate` medir a perda em posições não vistas.
 set -eu
+# O cache de disco da VM ocupa memória do Windows. Dentro de um escopo com limite de memória, o
+# Linux recicla o cache em vez de crescer: sem ele, em 28/09/2026 a VM chegou a 6,1 GB
+# descomprimindo um .gz de 2,6 GB e o Claude Code encerrou o treino por falta de memória. 3 GB
+# cobrem o embaralhamento (2 GB) e o treino na GPU.
+if [ -z "${CAIPORA_TRAIN_SCOPE:-}" ] && command -v systemd-run > /dev/null; then
+  export CAIPORA_TRAIN_SCOPE=1
+  exec systemd-run --scope --quiet -p MemoryMax=3G bash "$0" "$@"
+fi
 PREFIX=$1; ID=$2; EPOCHS=$3; WDL=${4:-0.5}; LR=${5:-0.001}
 # A engine precisa ser compilada com o mesmo HIDDEN (src/nnue.rs) para usar a rede.
 export CAIPORA_HIDDEN=${6:-256}
