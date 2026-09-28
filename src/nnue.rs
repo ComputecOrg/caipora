@@ -24,8 +24,10 @@ pub const HIDDEN: usize = 512;
 const QA: i32 = 255;
 /// Quantização dos pesos de saída.
 const QB: i32 = 64;
-/// Saída da rede (em unidades de vitória) para centipeões.
-const SCALE: i32 = 400;
+/// Saída da rede (em unidades de vitória) para centipeões. A g4 foi treinada na escala dos dados
+/// do Lc0 (400 no treinador); 0,70 dessa escala (280) foi a melhor em partidas contra 0,40, 0,55
+/// e 1,00 (D21): as margens da busca continuam na medida para que foram escritas.
+const SCALE: i32 = 280;
 /// Número de valores i16 no arquivo, sem o preenchimento.
 const NETWORK_VALUES: usize = 768 * HIDDEN + HIDDEN + 2 * HIDDEN + 1;
 /// Tamanho do arquivo: os valores, completados até múltiplo de 64 bytes.
@@ -33,7 +35,7 @@ pub const NETWORK_BYTES: usize = (2 * NETWORK_VALUES).div_ceil(64) * 64;
 
 /// Rede que vai dentro do executável (D14): treinada só com partidas do próprio Caipora (D2).
 static EMBEDDED: LazyLock<Arc<Network>> = LazyLock::new(|| {
-    let bytes = include_bytes!("../net/caipora-g3.nnue");
+    let bytes = include_bytes!("../net/caipora-g4.nnue");
     Arc::new(Network::from_bytes(bytes).expect("a rede embutida tem o formato certo"))
 });
 

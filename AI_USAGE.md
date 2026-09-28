@@ -30,7 +30,8 @@ the code can judge it with full information.
 - Since 28/09/2026 networks may also be trained on Leela Chess Zero training data, released
   under the Open Database License (ODbL), in the binpack format published by the Stockfish
   community. Every network trained on it says so in its release notes and in the repository's
-  decision log. (Until then the policy was self-play only.)
+  decision log. (Until then the policy was self-play only.) The first such network is g4
+  (28/09/2026), trained on `test80-mar2023-2tb7p-filter-v6-sk16` only.
 - No third-party networks are used, as weights or as a starting point.
 - The origin of each dataset (which network generated it, how many positions, search limits)
   is recorded in the repository.

@@ -290,3 +290,26 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   engine para a rede nova será escolhida em partidas, não na conta.
 - **Custo se estiver errada:** reputação na comunidade; voltar exige retreinar só com dados
   próprios (os geradores e o pipeline continuam prontos).
+
+## D21 — 28/09/2026 — A g4, treinada só com dados do Lc0, entra com escala 0,70
+
+- **Decisão:** `net/caipora-g4.nnue` substitui a g3 dentro do executável, e a escala de saída da
+  engine (`SCALE` em `src/nnue.rs`) passa de 400 para 280.
+- **Procedência:**
+  - dados: `test80-mar2023-2tb7p-filter-v6-sk16.min.binpack` (Kaggle `linrock`, 14,5 GB, dados de
+    treino do Lc0 no formato binpack, licença ODbL; D20), baixado na AWS e conferido por MD5
+    (`de039c18202beec5bd3ef6f9dfc84b48`);
+  - treino: bullet direto do binpack, só posições calmas (a partir do meio-lance 16, sem xeque,
+    lance quieto), 512 na camada oculta, wdl 0, escala dos dados 400, 60 blocos de 100 milhões
+    (6 bilhões de posições vistas, 36 min 47 s), lr 0,001 com cosseno; época 60;
+  - validação em 205 mil posições de outro mês do Lc0: época 15 0,011671; 30 0,011381; 45
+    0,011037; **60 0,010835**.
+- **Escala:** a calibração pela g3 ficou ambígua (0,2 a 0,66). Em partidas (todos contra todos,
+  8+0.08, 200 por confronto, 2000 partidas): a 0,70 venceu a 0,40 (+42 ± 29), a 0,55 (+67 ± 26)
+  e a 1,00 (+49 ± 26); contra a g3, +207 ± 37.
+- **Por quê:** SPRT de relógio contra a g3: **+237 ± 45** em 203 partidas. Gauntlet (300
+  partidas por adversário): Stash 33 73,2%, Stash 37 50,8% → **~3435 ± 22 CCRL Blitz** (+~190
+  sobre a v3.3).
+- **Custo se estiver errada:** a escala 280 pode não ser o ótimo (entre 0,55 e 1,00 ainda há
+  margem); outras redes de 512 (g3) passam a sair com avaliação menor na engine. Voltar é reverter
+  o commit (rede e `SCALE` juntos).
