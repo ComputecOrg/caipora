@@ -67,8 +67,11 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
 - `tools/fastchess/fastchess-windows-x86-64/fastchess.exe` (v1.8.2-alpha) e o livro
   `tools/8moves_v3.epd`. Regra de CPU da máquina (6 núcleos): `-concurrency 5` no máximo.
 - lichess-bot instalado em `C:\Projetos\lichess-bot` (venv próprio); config gerado por
-  `scripts/lichess_config.py`. Passo a passo em `docs/lichess.md`. O token fica só na variável
-  de ambiente `LICHESS_BOT_TOKEN`, nunca em arquivo.
+  `scripts/lichess_config.py`, com testes em `scripts/test_lichess_config.py` (fora do CI; rodar
+  de dentro da pasta do lichess-bot:
+  `venv\Scripts\python.exe -m unittest discover -s C:\Projetos\ChessAI\scripts`). Passo a passo
+  em `docs/lichess.md`. O token fica só na variável de ambiente `LICHESS_BOT_TOKEN`, nunca em
+  arquivo.
 
 ## Arquitetura (não mudar sem ruling)
 - Casas em LERF (a1 = 0, h8 = 63). Bitboards por tipo e por cor + mailbox de 64 casas.

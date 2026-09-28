@@ -66,6 +66,10 @@ venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py `
   valores absolutos. Em partidas casual o rating do bot fica no provisório de 3000, e a
   diferença relativa do padrão (±300) só achava bots de 2750 para cima: das 10 primeiras
   partidas, 9 derrotas e 1 empate contra adversários bem mais fortes.
+- `--rating-difference N` troca a faixa fixa por "rating atual do bot ± N", que o lichess-bot
+  recalcula a cada desafio. Serve para achar onde o bot está depois que ele já joga rated; a faixa
+  absoluta fica de reserva para quando ele não tem rating no ritmo. Desde 27/09/2026 o bot do
+  servidor usa ±300 (com rating 2543 havia 59 bots online nessa faixa).
 
 ## Regras do Lichess que afetam o bot
 
