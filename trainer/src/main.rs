@@ -2,7 +2,7 @@
 //!
 //! A arquitetura e a quantização precisam bater com `src/nnue.rs` da engine:
 //! (768 → HIDDEN)×2 → 1, SCReLU, QA = 255, QB = 64, escala 400. HIDDEN vem da variável de
-//! ambiente `CAIPORA_HIDDEN` (padrão 512, o da engine); a engine precisa ser compilada com o
+//! ambiente `CAIPORA_HIDDEN` (padrão 1024, o da engine); a engine precisa ser compilada com o
 //! mesmo `HIDDEN`.
 //!
 //! Uso:
@@ -44,7 +44,7 @@ use bullet::{
 };
 use sfbinpack::{ChunkReader, read_chunk_into};
 
-const DEFAULT_HIDDEN: usize = 512;
+const DEFAULT_HIDDEN: usize = 1024;
 const SCALE: i32 = 400;
 const QA: i16 = 255;
 const QB: i16 = 64;

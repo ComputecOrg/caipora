@@ -313,3 +313,21 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** a escala 280 pode não ser o ótimo (entre 0,55 e 1,00 ainda há
   margem); outras redes de 512 (g3) passam a sair com avaliação menor na engine. Voltar é reverter
   o commit (rede e `SCALE` juntos).
+
+## D22 — 30/09/2026 — A g5 entra com camada oculta de 1024
+
+- **Decisão:** `net/caipora-g5.nnue` substitui a g4 dentro do executável e a arquitetura passa a
+  (768 → 1024)×2 → 1 (`HIDDEN` = 1024; também o padrão do treinador). `SCALE` continua 280 (mesma
+  escala de dados da g4, D21).
+- **Procedência:** só dados do Lc0 (ODbL, D20), três binpacks lidos em sequência (sem cópia
+  intercalada, que encheu o disco do dono em 30/09): `test80-jun2023-2tb7p` (15,7 GB),
+  `test80-aug2023-2tb7p` (51 GB, MD5 conferido) e `test80-mar2023-2tb7p-filter-v6-sk16` (14,5 GB);
+  só posições calmas; wdl 0; 120 blocos de 100 milhões (12 bilhões vistos, 2 h 57 min na GTX 1660
+  a ~1,1 milhão de posições/s); lr 0,001 com cosseno; época 120.
+- **Validação** (205 mil posições de jun/2023, que também estão no treino, então só para comparar
+  épocas): época 30 0,012168; 60 0,011472; 90 0,011486; **120 0,011355**; g4 0,011764.
+- **Por quê:** SPRT de relógio (8+0.08) contra a g4: **+41 ± 17** em 529 partidas, já pagando os
+  ~23% de nós/s a menos da rede maior. Gauntlet (300 por adversário): Stash 33 75,2%, Stash 37
+  53,8% → **~3454 ± 22 CCRL Blitz**.
+- **Custo se estiver errada:** a engine fica ~23% mais lenta por nó (no servidor do bot, 2 vCPUs,
+  isso pesa); redes de 512 não carregam mais sem recompilar. Voltar é reverter o commit.
