@@ -6,7 +6,7 @@ bater: `src/nnue.rs` (inferência), `trainer/src/main.rs` (treino) e o arquivo d
 - Arquitetura: (768 → 1024)×2 → 1, SCReLU (até a g2, 256; g3 e g4, 512; a g5 passou a 1024, D22).
 - Quantização: QA = 255, QB = 64; escala 400 no treinador e 280 na engine (`SCALE`, D21: a g4
   aprendeu na escala dos dados do Lc0, e 0,70 dela foi a melhor em partidas).
-- Arquivo: 1.578.560 bytes (com 512, 789.568; com 256, 394.816).
+- Arquivo: 1.579.072 bytes (com 512, 789.568; com 256, 394.816).
 - O tamanho da camada oculta é `HIDDEN` em `src/nnue.rs` e `CAIPORA_HIDDEN` no treinador
   (6º argumento do `wsl_train.sh`); uma rede só carrega numa engine compilada com o mesmo valor.
 
