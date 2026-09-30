@@ -11,7 +11,7 @@ use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
 use crate::nnue::{Accumulators, Network};
 use crate::position::Position;
 use crate::see::see;
-use crate::timeman::{Limits, should_start_iteration};
+use crate::timeman::{Limits, iteration_time_scale, should_start_iteration_scaled};
 use crate::tt::{Bound, TranspositionTable};
 use crate::types::{Color, Piece, PieceType, Square};
 
@@ -400,6 +400,7 @@ impl Searcher {
                 pv: vec![first_move],
             };
             let mut score = 0;
+            let mut stability = 0;
             for depth in 1..=max_depth {
                 state.root_depth = depth;
                 state.seldepth = 0;
@@ -407,8 +408,15 @@ impl Searcher {
                 if state.stopped {
                     break;
                 }
+                let score_drop = if depth > 1 { score - result } else { 0 };
                 score = result;
                 let pv = state.pv[0].clone();
+                if depth > 1 && pv.first() == best.best_move.as_ref() {
+                    stability += 1;
+                } else {
+                    stability = 0;
+                }
+                let time_scale = iteration_time_scale(stability, score_drop);
                 best = SearchResult {
                     best_move: pv.first().copied().or(best.best_move),
                     score,
@@ -426,9 +434,9 @@ impl Searcher {
                     pv,
                 });
                 // Enquanto pondera, sempre aprofunda: quem encerra é o `ponderhit` ou o `stop`.
-                let deepen = state
-                    .clock()
-                    .is_none_or(|_| should_start_iteration(state.start.elapsed(), limits));
+                let deepen = state.clock().is_none_or(|_| {
+                    should_start_iteration_scaled(state.start.elapsed(), limits, time_scale)
+                });
                 if !deepen || state.stop.load(Ordering::Relaxed) {
                     break;
                 }
