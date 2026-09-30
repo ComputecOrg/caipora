@@ -1,5 +1,15 @@
 # Estado do Caipora
 
+## v3.5 — 30/09/2026 (rede g5, 1024 na camada oculta)
+
+- **Força estimada: ~3454 ± 22 CCRL Blitz** com 1 thread. Gauntlet na AWS a 8+0.08, 300
+  partidas por adversário, todas com terminação normal (`tools/aws-sprt/gauntlet-g5/`): Stash 33
+  75,2%, Stash 37 (3419) 53,8%.
+- **O que entrou:** rede g5 (D22), 1024 na oculta, só dados do Lc0 (mar, jun e ago/2023, ~81 GB).
+  SPRT de relógio contra a g4: +41 ± 17 em 529 partidas.
+- **Bench:** 2619291.
+- **Tucano (3491):** a ~35 pontos.
+
 ## v3.4 — 28/09/2026 (PR da g4: rede treinada com dados do Lc0)
 
 - **Força estimada: ~3435 ± 22 CCRL Blitz** com 1 thread (+~190 sobre a v3.3). Gauntlet na AWS
