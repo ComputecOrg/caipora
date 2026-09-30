@@ -1,16 +1,18 @@
 //! Treino da rede do Caipora com o `bullet` (github.com/jw1912/bullet, licença MIT), na GPU.
 //!
 //! A arquitetura e a quantização precisam bater com `src/nnue.rs` da engine:
-//! (768 → HIDDEN)×2 → 1, SCReLU, QA = 255, QB = 64, escala 400. HIDDEN vem da variável de
-//! ambiente `CAIPORA_HIDDEN` (padrão 1024, o da engine); a engine precisa ser compilada com o
-//! mesmo `HIDDEN`.
+//! (768·8 king buckets espelhados → HIDDEN)×2 → 8 output buckets, SCReLU, QA = 255, QB = 64,
+//! escala 400. O layout dos king buckets (`KING_BUCKETS`) é o mesmo da engine; um factoriser
+//! (pesos comuns a todos os buckets) ajuda no treino e é somado a cada bucket ao salvar. HIDDEN vem
+//! da variável de ambiente `CAIPORA_HIDDEN` (padrão 1024, o da engine).
 //!
 //! Uso:
 //! `caipora-trainer <dados.bin|a.binpack[,b.binpack...]> <id> <superbatches> [lotes] [wdl] [lr]`
 //!
 //! - Os dados vêm do `caipora datagen`, convertidos com `bullet-utils convert --from text` e
-//!   embaralhados com `bullet-utils shuffle`; ou de um binpack do Stockfish (dados do Lc0, ODbL,
-//!   D20), lido direto, só com as posições calmas (`quiet_position`).
+//!   embaralhados com `bullet-utils shuffle`; ou de binpacks do Stockfish (dados do Lc0, ODbL,
+//!   D20), lidos direto e intercalados bloco a bloco (`interleave`), só com as posições calmas
+//!   (`quiet_position`).
 //! - `CAIPORA_EVAL_SCALE` (padrão 400) divide a pontuação dos dados antes da sigmoide. Os binpacks
 //!   estão na escala interna do Stockfish: a escala certa sai de `dump` + `caipora validate` (a
 //!   que deixa a rede atual mais perto dos dados), para a rede nova continuar em centipeões nossos.
@@ -24,11 +26,19 @@
 //! Amostra: `caipora-trainer dump <dados.binpack> <quantas> <saída.txt> [a cada N]` grava posições
 //! calmas no formato do `caipora datagen` (`FEN | pontuação | resultado`, do lado das brancas).
 
+mod interleave;
+
 use std::io::{BufReader, BufWriter, Write};
 
 use bullet::{
-    game::inputs::Chess768,
-    nn::optimiser::AdamW,
+    game::{
+        inputs::{ChessBucketsMirrored, get_num_buckets},
+        outputs::MaterialCount,
+    },
+    nn::{
+        InitSettings, Shape,
+        optimiser::{AdamW, AdamWParams},
+    },
     trainer::{
         save::SavedFormat,
         schedule::{TrainingSchedule, TrainingSteps, lr, wdl},
@@ -38,13 +48,27 @@ use bullet::{
         ValueTrainerBuilder,
         loader::{
             self,
-            sfbinpack::{MoveType, PieceType, SfBinpackLoader, TrainingDataEntry},
+            sfbinpack::{MoveType, PieceType, TrainingDataEntry},
         },
     },
 };
 use sfbinpack::{ChunkReader, read_chunk_into};
 
 const DEFAULT_HIDDEN: usize = 1024;
+/// O mesmo layout de `KING_BUCKETS` em `src/nnue.rs` da engine.
+#[rustfmt::skip]
+const KING_BUCKETS: [usize; 32] = [
+    0, 1, 2, 3,
+    4, 4, 5, 5,
+    6, 6, 6, 6,
+    6, 6, 6, 6,
+    7, 7, 7, 7,
+    7, 7, 7, 7,
+    7, 7, 7, 7,
+    7, 7, 7, 7,
+];
+const INPUT_BUCKETS: usize = get_num_buckets(&KING_BUCKETS);
+const OUTPUT_BUCKETS: usize = 8;
 const SCALE: i32 = 400;
 const QA: i16 = 255;
 const QB: i16 = 64;
@@ -64,7 +88,8 @@ fn dump(path: &str, count: usize, out: &str, every: usize) {
     let mut reader = BufReader::new(std::fs::File::open(path).expect("binpack não abre"));
     let mut writer = BufWriter::new(std::fs::File::create(out).expect("saída não abre"));
     let (mut chunk, mut seen, mut written) = (Vec::new(), 0usize, 0usize);
-    while written < count && read_chunk_into(&mut reader, &mut chunk).expect("binpack com defeito") {
+    while written < count && read_chunk_into(&mut reader, &mut chunk).expect("binpack com defeito")
+    {
         let mut entries = ChunkReader::default();
         while written < count && entries.has_next(&chunk) {
             let entry = entries.next(&chunk);
@@ -93,7 +118,12 @@ fn main() {
         let usage = "uso: caipora-trainer dump <dados.binpack> <quantas> <saída.txt> [a cada N]";
         let count = args.get(2).and_then(|v| v.parse().ok()).expect(usage);
         let every = args.get(4).map_or(1, |v| v.parse().expect(usage));
-        dump(args.get(1).expect(usage), count, args.get(3).expect(usage), every);
+        dump(
+            args.get(1).expect(usage),
+            count,
+            args.get(3).expect(usage),
+            every,
+        );
         return;
     }
     let eval_scale: f32 = std::env::var("CAIPORA_EVAL_SCALE").map_or(SCALE as f32, |v| {
@@ -109,21 +139,49 @@ fn main() {
     let mut trainer = ValueTrainerBuilder::default()
         .dual_perspective()
         .optimiser(AdamW)
-        .inputs(Chess768)
+        .inputs(ChessBucketsMirrored::new(KING_BUCKETS))
+        .output_buckets(MaterialCount::<OUTPUT_BUCKETS>)
         .save_format(&[
-            SavedFormat::id("l0w").round().quantise::<i16>(QA),
+            // O factoriser é somado a cada bucket: a engine só vê os pesos finais.
+            SavedFormat::id("l0w")
+                .transform(|store, weights| {
+                    let factoriser = store.get("l0f").values.f32().repeat(INPUT_BUCKETS);
+                    weights
+                        .into_iter()
+                        .zip(factoriser)
+                        .map(|(a, b)| a + b)
+                        .collect()
+                })
+                .round()
+                .quantise::<i16>(QA),
             SavedFormat::id("l0b").round().quantise::<i16>(QA),
-            SavedFormat::id("l1w").round().quantise::<i16>(QB),
+            // Transposto: 2·HIDDEN pesos seguidos por bucket de saída, como a engine lê.
+            SavedFormat::id("l1w")
+                .round()
+                .quantise::<i16>(QB)
+                .transpose(),
             SavedFormat::id("l1b").round().quantise::<i16>(QA * QB),
         ])
         .loss_fn(|output, target| output.sigmoid().squared_error(target))
-        .build(|builder, stm, ntm| {
-            let l0 = builder.new_affine("l0", 768, hidden);
-            let l1 = builder.new_affine("l1", 2 * hidden, 1);
+        .build(|builder, stm, ntm, output_buckets| {
+            let factoriser =
+                builder.new_weights("l0f", Shape::new(hidden, 768), InitSettings::Zeroed);
+            let mut l0 = builder.new_affine("l0", 768 * INPUT_BUCKETS, hidden);
+            l0.weights = l0.weights + factoriser.repeat(INPUT_BUCKETS);
+            let l1 = builder.new_affine("l1", 2 * hidden, OUTPUT_BUCKETS);
             let stm_hidden = l0.forward(stm).screlu();
             let ntm_hidden = l0.forward(ntm).screlu();
             l1.forward(stm_hidden.concat(ntm_hidden))
+                .select(output_buckets)
         });
+    // Pesos de entrada somam o factoriser: limite menor para a soma continuar no intervalo.
+    let stricter = AdamWParams {
+        max_weight: 0.99,
+        min_weight: -0.99,
+        ..Default::default()
+    };
+    trainer.optimiser.set_params_for_weight("l0w", stricter);
+    trainer.optimiser.set_params_for_weight("l0f", stricter);
 
     if args.first().map(String::as_str) == Some("eval") {
         let checkpoint = args.get(1).expect(usage);
@@ -167,10 +225,10 @@ fn main() {
     };
     println!("escala dos dados: {eval_scale}");
     if data.ends_with(".binpack") {
-        // Vários binpacks separados por vírgula são lidos em sequência, sem cópia intercalada (um
-        // arquivo intercalado dobraria o disco: em 30/09/2026 isso encheu o C: do dono).
+        // Vários binpacks separados por vírgula, intercalados bloco a bloco e embaralhados em lotes
+        // de 16 milhões de posições (~512 MB), sem cópia em disco.
         let paths: Vec<&str> = data.split(',').collect();
-        let data_loader = SfBinpackLoader::new_concat_multiple(&paths, 1024, 4, quiet_position);
+        let data_loader = interleave::InterleavedBinpacks::new(&paths, 1 << 24, quiet_position);
         trainer.run(&schedule, &settings, &data_loader);
     } else {
         let data_loader = loader::DirectSequentialDataLoader::new(&[data.as_str()]);

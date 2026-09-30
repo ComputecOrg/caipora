@@ -988,7 +988,7 @@ impl SearchState<'_> {
     fn raw_eval(&self, pos: &Position, ply: usize) -> i32 {
         let score = match self.network {
             Some(net) => {
-                let score = net.output(&self.accumulators[ply], pos.side_to_move());
+                let score = net.output(&self.accumulators[ply], pos);
                 // Em debug, confere o incremental contra o cálculo do zero, por amostragem para o
                 // build de debug seguir jogável (o CI joga partidas com relógio).
                 if cfg!(debug_assertions) && self.nodes.is_multiple_of(64) {
