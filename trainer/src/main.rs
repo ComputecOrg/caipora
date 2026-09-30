@@ -6,7 +6,7 @@
 //! mesmo `HIDDEN`.
 //!
 //! Uso:
-//! `caipora-trainer <dados.bin|dados.binpack> <id> <superbatches> [lotes por superbatch] [wdl] [lr]`
+//! `caipora-trainer <dados.bin|a.binpack[,b.binpack...]> <id> <superbatches> [lotes] [wdl] [lr]`
 //!
 //! - Os dados vêm do `caipora datagen`, convertidos com `bullet-utils convert --from text` e
 //!   embaralhados com `bullet-utils shuffle`; ou de um binpack do Stockfish (dados do Lc0, ODbL,
@@ -167,7 +167,10 @@ fn main() {
     };
     println!("escala dos dados: {eval_scale}");
     if data.ends_with(".binpack") {
-        let data_loader = SfBinpackLoader::new(&data, 1024, 4, quiet_position);
+        // Vários binpacks separados por vírgula são lidos em sequência, sem cópia intercalada (um
+        // arquivo intercalado dobraria o disco: em 30/09/2026 isso encheu o C: do dono).
+        let paths: Vec<&str> = data.split(',').collect();
+        let data_loader = SfBinpackLoader::new_concat_multiple(&paths, 1024, 4, quiet_position);
         trainer.run(&schedule, &settings, &data_loader);
     } else {
         let data_loader = loader::DirectSequentialDataLoader::new(&[data.as_str()]);
