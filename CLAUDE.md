@@ -73,8 +73,10 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   `scripts/lichess_config.py`, com testes em `scripts/test_lichess_config.py` (fora do CI; rodar
   de dentro da pasta do lichess-bot:
   `venv\Scripts\python.exe -m unittest discover -s C:\Projetos\ChessAI\scripts`). Passo a passo
-  em `docs/lichess.md`. O token fica só na variável de ambiente `LICHESS_BOT_TOKEN`, nunca em
-  arquivo.
+  em `docs/lichess.md`. O token nunca passa pelo chat nem pelo repositório: no PC, só na variável
+  de ambiente `LICHESS_BOT_TOKEN`; no servidor, em `/etc/caipora-bot.env` (root, 600).
+- Torneios de bots: `scripts/tournament_join.py` (testes no mesmo `discover` acima), timer
+  `caipora-tournaments` no servidor; ver `docs/lichess.md`.
 
 ## Arquitetura (não mudar sem ruling)
 - Casas em LERF (a1 = 0, h8 = 63). Bitboards por tipo e por cor + mailbox de 64 casas.

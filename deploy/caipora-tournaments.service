@@ -1,0 +1,13 @@
+[Unit]
+Description=Caipora: inscrição nos torneios de bots das equipes do bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=caipora
+# O mesmo token do bot (precisa de tournament:write e team:write).
+EnvironmentFile=/etc/caipora-bot.env
+ExecStart=/usr/bin/python3 /opt/caipora/tournament_join.py
+StandardOutput=append:/opt/caipora/tournaments.log
+StandardError=append:/opt/caipora/tournaments.log

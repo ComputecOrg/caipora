@@ -80,6 +80,27 @@ O bot joga as aberturas pelo chessdb e pela análise em nuvem do Lichess (melhor
 Lichess (com pelo menos 5 s no relógio). O log do lichess-bot mostra "Got move ... from chessdb.cn",
 "... from lichess cloud analysis" e "... from lichess.org" (tablebase).
 
+## Torneios de bots
+
+- O bot está nas equipes **DarkOnBot** (`darkonbot`, a mais ativa: "FDG Open Bot and Humans" aos
+  sábados 13h, "Bot League" aos domingos, team battles avulsos) e **Lichess Bots**.
+- `scripts/tournament_join.py` (testes em `scripts/test_tournament_join.py`) roda de hora em hora
+  no servidor pelo timer `caipora-tournaments` e inscreve o bot nas arenas das equipes dele que:
+  aceitam bots, são de xadrez padrão e rated, têm base de 3 a 15 minutos (sem bullet), ainda não
+  começaram e começam em até 7 dias. Em team battle, joga por uma das equipes do bot na disputa.
+- As partidas do torneio chegam ao lichess-bot como qualquer outra; não precisa mexer no config.
+- Token: o do bot, com `tournament:write` e `team:write` além de `bot:play`.
+- Instalar ou atualizar:
+  ```bash
+  S=root@<servidor>
+  scp scripts/tournament_join.py $S:/opt/caipora/
+  scp deploy/caipora-tournaments.service deploy/caipora-tournaments.timer $S:/etc/systemd/system/
+  ssh $S 'chown caipora:caipora /opt/caipora/tournament_join.py && systemctl daemon-reload     && systemctl enable --now caipora-tournaments.timer'
+  ```
+- Log: `/opt/caipora/tournaments.log`. Simular sem inscrever: rodar o script com `--dry-run`.
+- Entrar em mais uma equipe: `POST /team/<id>/join` com o token do bot (equipes fechadas pedem
+  aprovação do líder).
+
 ## Regras do Lichess que afetam o bot
 
 - **100 partidas bot contra bot por dia**, contando desafios recebidos; contra humanos não há
