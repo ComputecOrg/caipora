@@ -1,7 +1,8 @@
 """Inscreve o bot nos torneios (arenas) abertos a bots das equipes dele.
 
 Roda de hora em hora no servidor (timer systemd `caipora-tournaments`). Só entra em arena de
-xadrez padrão, rated, com bots liberados, ritmo de blitz ou rápida (base de 3 a 15 minutos), que
+xadrez padrão, rated, com bots liberados, ritmo de blitz a clássica curta (duração estimada de 3 a
+50 minutos, base + 40 × incremento: sem bullet), que
 ainda não começou e começa em até 7 dias. Em team battle, joga por uma das equipes do bot que
 estiver na disputa. O lichess-bot joga as partidas sozinho: o torneio chega como mais um
 `gameStart`.
@@ -22,8 +23,10 @@ import urllib.parse
 import urllib.request
 
 API = "https://lichess.org"
-MIN_BASE_SECONDS = 180
-MAX_BASE_SECONDS = 900
+# Duração estimada (base + 40 lances de incremento, como o Lichess classifica): de blitz (3 min)
+# até 50 minutos; abaixo é bullet, acima prende o bot por horas.
+MIN_ESTIMATED_SECONDS = 180
+MAX_ESTIMATED_SECONDS = 3000
 HORIZON_MS = 7 * 86_400_000
 CREATED = 10
 
@@ -50,8 +53,9 @@ def reason_to_skip(tournament: dict, now_ms: int) -> str | None:
         return "variante"
     if not tournament.get("rated"):
         return "casual"
-    base = tournament.get("clock", {}).get("limit", 0)
-    if not MIN_BASE_SECONDS <= base <= MAX_BASE_SECONDS:
+    clock = tournament.get("clock", {})
+    estimated = clock.get("limit", 0) + 40 * clock.get("increment", 0)
+    if not MIN_ESTIMATED_SECONDS <= estimated <= MAX_ESTIMATED_SECONDS:
         return "ritmo"
     if tournament.get("isFinished") or tournament.get("status", CREATED) != CREATED:
         return "já começou"
@@ -72,6 +76,15 @@ def team_for(tournament: dict, our_teams: list[str]) -> tuple[bool, str | None]:
         if team in teams:
             return True, team
     return False, None
+
+
+def soonest_first(tournaments: list[dict]) -> list[dict]:
+    """O Lichess limita as inscrições por período: as vagas vão primeiro para os mais próximos."""
+    return sorted(tournaments, key=start_ms)
+
+
+def is_join_limit(result: dict) -> bool:
+    return "too many tournaments" in str(result.get("error", ""))
 
 
 class Lichess:
@@ -124,32 +137,35 @@ def run(lichess: Lichess, dry_run: bool) -> int:
     teams = lichess.my_teams(me)
     print(f"{datetime.datetime.now():%Y-%m-%d %H:%M} {me}: equipes {teams}")
     joined = 0
-    seen = set()
+    candidates = {}
     for team in teams:
         for listed in lichess.team_arenas(team):
-            tid = listed["id"]
-            if tid in seen or listed.get("status") != CREATED or start_ms(listed) - now > HORIZON_MS:
-                continue
-            seen.add(tid)
-            full = lichess.tournament(tid)
-            name = full.get("fullName", tid)
-            reason = reason_to_skip(full, now)
-            if reason is None:
-                allowed, battle_team = team_for(full, teams)
-                if not allowed:
-                    reason = "team battle sem equipe nossa"
-            if reason:
-                print(f"  pula {tid} ({name}): {reason}")
-                continue
-            if dry_run:
-                print(f"  entraria em {tid} ({name})")
-                continue
-            result = lichess.join(tid, battle_team)
-            if result.get("ok"):
-                joined += 1
-                print(f"  entrou em {tid} ({name})" + (f" pela equipe {battle_team}" if battle_team else ""))
-            else:
-                print(f"  falhou {tid} ({name}): {result.get('error', result)}")
+            if listed.get("status") == CREATED and start_ms(listed) - now <= HORIZON_MS:
+                candidates[listed["id"]] = listed
+    for listed in soonest_first(list(candidates.values())):
+        tid = listed["id"]
+        full = lichess.tournament(tid)
+        name = full.get("fullName", tid)
+        reason = reason_to_skip(full, now)
+        if reason is None:
+            allowed, battle_team = team_for(full, teams)
+            if not allowed:
+                reason = "team battle sem equipe nossa"
+        if reason:
+            print(f"  pula {tid} ({name}): {reason}")
+            continue
+        if dry_run:
+            print(f"  entraria em {tid} ({name})")
+            continue
+        result = lichess.join(tid, battle_team)
+        if result.get("ok"):
+            joined += 1
+            print(f"  entrou em {tid} ({name})" + (f" pela equipe {battle_team}" if battle_team else ""))
+        else:
+            print(f"  falhou {tid} ({name}): {result.get('error', result)}")
+            if is_join_limit(result):
+                print("  limite de inscrições do Lichess; o resto fica para a próxima rodada")
+                break
     return joined
 
 
