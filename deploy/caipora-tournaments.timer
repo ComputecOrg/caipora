@@ -1,0 +1,11 @@
+[Unit]
+Description=Caipora: procura torneios de bots a cada hora
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
