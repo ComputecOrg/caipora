@@ -1,5 +1,22 @@
 # Estado do Caipora
 
+## v3.6 — 30/09/2026 (rede g6 com buckets, extensões singulares, tempo por estabilidade)
+
+- **Força estimada:** ainda sem gauntlet. Pelos SPRTs, bem acima da v3.5 (os ganhos não somam
+  exatamente).
+- **O que entrou** (todos com terminação normal; logs em `tools/aws-sprt/`):
+  - rede g6 (D23): king buckets espelhados + output buckets, só dados do Lc0. SPRT de relógio
+    contra a g5: **+22,9 ± 12,2** em 1036 partidas (local, à parte: +17,8 ± 14,2 em 800);
+  - extensões singulares com multi-cut: SPRT de nós fixos **+28,1 ± 13,6** em 808 partidas;
+  - limite suave do tempo pela estabilidade do melhor lance e pela queda da pontuação: SPRT de
+    relógio **+16,2 ± 9,2** em 1288 partidas.
+- **Reprovadas ou neutras:**
+  - LMR guiada pelo histórico: +0,3 ± 6,6 em 3350 partidas;
+  - pontuação da TT refinando a eval do null move e da futility: +1,5 ± 6,9 em 2982;
+  - razoring, sem SPRT: perdia o mate em dois do teste, mesmo só até a profundidade 2.
+- **No bot desde 30/09/2026, 23h20** (`caipora-a854a73`).
+- **Bench:** 5108549. A g6 faz ~23% menos nós/s que a g5 (472 mil contra 611 mil no WSL).
+
 ## v3.5 — 30/09/2026 (rede g5, 1024 na camada oculta)
 
 - **Força estimada: ~3454 ± 22 CCRL Blitz** com 1 thread. Gauntlet na AWS a 8+0.08, 300
@@ -170,12 +187,11 @@
 - Mudança de tempo: SPRT de relógio a 8+0.08.
 - Branches empilhados (D10).
 
-1. **Tempo na abertura:** o bot gasta 46% do tempo base nos lances 2 a 11 (adversários: 32%);
-   testar gastar menos nos primeiros lances, com SPRT de relógio.
-2. **Quarta geração de dados (g4)**, jogada pela g3: mais posições e talvez mais nós por lance;
-   testar camada oculta maior que 512 ou king buckets.
-3. **LMR guiada pelo histórico** (branch `feat/history-lmr`): retestar em cima da main.
-4. **Ferramentas:**
+1. **Cache de acumuladores por bucket do rei:** recuperar parte da velocidade perdida com a g6.
+2. **Escala da g6:** reajustar `SCALE` com partidas (a g4 ganhou muito com isso, D21).
+3. **g7:** mais blocos de treino; a perda de validação da g6 ainda caía na época 120.
+4. **Tempo na abertura:** com o livro online no bot, medir de novo antes de mexer.
+5. **Ferramentas:**
    - `caipora validate`: perda de validação;
    - `caipora-crash.log`: registro de quedas;
    - `scripts/wsl_train.sh`: treino com um comando.
