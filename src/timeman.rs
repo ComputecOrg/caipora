@@ -73,7 +73,25 @@ pub fn compute_limits(params: &GoParams, side: Color, move_overhead: Duration) -
 /// levar mais que todas as anteriores juntas e, começada tarde, só terminaria no limite duro.
 /// Sem limite suave (depth, nodes, infinite), sempre.
 pub fn should_start_iteration(elapsed: Duration, limits: &Limits) -> bool {
-    limits.soft_time.is_none_or(|soft| elapsed < soft * 6 / 10)
+    should_start_iteration_scaled(elapsed, limits, 1.0)
+}
+
+/// Como `should_start_iteration`, com o limite suave multiplicado por `scale` (ver
+/// `iteration_time_scale`). O limite duro não muda.
+pub fn should_start_iteration_scaled(elapsed: Duration, limits: &Limits, scale: f64) -> bool {
+    limits
+        .soft_time
+        .is_none_or(|soft| elapsed < soft.mul_f64(scale) * 6 / 10)
+}
+
+/// Fator do limite suave pelo que a busca já viu: `stability` é quantas iterações seguidas o melhor
+/// lance não mudou; `score_drop`, quanto a pontuação caiu desde a iteração anterior (negativo se
+/// subiu). Lance novo ou pontuação caindo pedem mais tempo; lance firme há muito, menos.
+pub fn iteration_time_scale(stability: u32, score_drop: i32) -> f64 {
+    const BY_STABILITY: [f64; 6] = [1.6, 1.3, 1.1, 1.0, 0.9, 0.8];
+    let base = BY_STABILITY[(stability as usize).min(BY_STABILITY.len() - 1)];
+    let drop = 1.0 + f64::from(score_drop.clamp(0, 100)) / 200.0;
+    (base * drop).clamp(0.5, 2.0)
 }
 
 #[cfg(test)]
@@ -103,6 +121,46 @@ mod tests {
             Duration::from_secs(3_600),
             &Limits::default()
         ));
+    }
+
+    #[test]
+    fn a_stable_best_move_saves_time_and_a_changing_or_falling_one_spends_more() {
+        let limits = Limits {
+            soft_time: ms(1_000),
+            hard_time: ms(4_000),
+            ..Limits::default()
+        };
+        // Com o fator 1, o corte continua nos 60%.
+        assert!(should_start_iteration_scaled(
+            Duration::from_millis(599),
+            &limits,
+            1.0
+        ));
+        assert!(!should_start_iteration_scaled(
+            Duration::from_millis(600),
+            &limits,
+            1.0
+        ));
+        assert!(should_start_iteration_scaled(
+            Duration::from_millis(900),
+            &limits,
+            2.0
+        ));
+        // Lance que acabou de mudar ganha tempo; estável há várias iterações, perde.
+        let changed = iteration_time_scale(0, 0);
+        let steady = iteration_time_scale(3, 0);
+        let settled = iteration_time_scale(8, 0);
+        assert!(
+            changed > steady && steady > settled,
+            "{changed} {steady} {settled}"
+        );
+        assert_eq!(steady, 1.0);
+        // Pontuação caindo desde a iteração anterior pede mais tempo; subindo, nada muda.
+        assert!(iteration_time_scale(3, 50) > steady);
+        assert_eq!(iteration_time_scale(3, -50), steady);
+        // Nunca passa do dobro nem cai abaixo da metade.
+        assert!(iteration_time_scale(0, 1_000) <= 2.0);
+        assert!(iteration_time_scale(100, 0) >= 0.5);
     }
 
     #[test]
