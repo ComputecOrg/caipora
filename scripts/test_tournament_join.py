@@ -50,9 +50,18 @@ class Choice(unittest.TestCase):
         self.assertEqual(tournament_join.reason_to_skip(bullet, NOW), "ritmo")
         two_one = arena(clock={"limit": 120, "increment": 1})
         self.assertEqual(tournament_join.reason_to_skip(two_one, NOW), "ritmo")
-        classical = arena(clock={"limit": 1800, "increment": 0})
+        classical = arena(clock={"limit": 3600, "increment": 0})
         self.assertEqual(tournament_join.reason_to_skip(classical, NOW), "ritmo")
         self.assertIsNone(tournament_join.reason_to_skip(arena(clock={"limit": 600, "increment": 5}), NOW))
+
+    def test_the_clock_is_judged_by_its_estimated_length_like_lichess_does(self):
+        # Base + 40 lances de incremento: 1+40 é partida longa, não bullet.
+        long_increment = arena(clock={"limit": 60, "increment": 40})
+        self.assertIsNone(tournament_join.reason_to_skip(long_increment, NOW))
+        # 2+1 dá 160 s estimados: bullet.
+        self.assertEqual(tournament_join.reason_to_skip(arena(clock={"limit": 120, "increment": 1}), NOW), "ritmo")
+        # Acima de 50 minutos estimados, fora (prende o bot por horas).
+        self.assertEqual(tournament_join.reason_to_skip(arena(clock={"limit": 3000, "increment": 10}), NOW), "ritmo")
 
     def test_started_finished_or_far_away_arenas_are_skipped(self):
         self.assertEqual(tournament_join.reason_to_skip(arena(status=20), NOW), "já começou")
@@ -85,3 +94,18 @@ class TeamBattle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Order(unittest.TestCase):
+    def test_the_soonest_arenas_come_first(self):
+        # O Lichess limita as inscrições por período: os mais próximos primeiro.
+        later = arena(id="later", startsAt=NOW + 5 * 86_400_000)
+        soon = arena(id="soon", startsAt=NOW + 3_600_000)
+        middle = arena(id="middle", startsAt="2027-01-17T08:00:00Z")
+        ordered = tournament_join.soonest_first([later, middle, soon])
+        self.assertEqual([t["id"] for t in ordered], ["soon", "middle", "later"])
+
+    def test_the_too_many_tournaments_answer_stops_the_round(self):
+        self.assertTrue(tournament_join.is_join_limit({"error": 'HTTP 400: {"error":"You are joining too many tournaments"}'}))
+        self.assertFalse(tournament_join.is_join_limit({"error": "HTTP 400: rating too low"}))
+        self.assertFalse(tournament_join.is_join_limit({"ok": True}))

@@ -92,8 +92,13 @@ Lichess (com pelo menos 5 s no relógio). O log do lichess-bot mostra "Got move 
   sábados 13h, "Bot League" aos domingos, team battles avulsos) e **Lichess Bots**.
 - `scripts/tournament_join.py` (testes em `scripts/test_tournament_join.py`) roda de hora em hora
   no servidor pelo timer `caipora-tournaments` e inscreve o bot nas arenas das equipes dele que:
-  aceitam bots, são de xadrez padrão e rated, têm base de 3 a 15 minutos (sem bullet), ainda não
+  aceitam bots, são de xadrez padrão e rated, duram de 3 a 50 minutos estimados (base + 40 ×
+  incremento, como o Lichess classifica; sem bullet), ainda não
   começaram e começam em até 7 dias. Em team battle, joga por uma das equipes do bot na disputa.
+- O Lichess limita as inscrições por período ("You are joining too many tournaments"): o script
+  inscreve primeiro os torneios mais próximos e para ao bater no limite; a rodada seguinte continua.
+- O bot pode estar em no máximo 15 equipes ("You have joined too many teams"); em 01/10/2026 saiu
+  da Lichess Bots (sem torneios desde 2021) para entrar no The Sacrifice Club.
 - As partidas do torneio chegam ao lichess-bot como qualquer outra; não precisa mexer no config.
 - Token: o do bot, com `tournament:write` e `team:write` além de `bot:play`.
 - Instalar ou atualizar:
