@@ -177,6 +177,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="desafiar bots a até N pontos do rating atual do bot (em vez da faixa fixa)",
     )
     parser.add_argument(
+        "--rating-below",
+        type=int,
+        metavar="N",
+        help="com --rating-difference, limite só para baixo (ex.: 100 para -100/+300); "
+        "precisa do patch local scripts/lichess-bot-rating-below.patch",
+    )
+    parser.add_argument(
         "--move-overhead",
         type=int,
         default=2000,
@@ -197,6 +204,8 @@ def build_config(config: dict, args: argparse.Namespace) -> dict:
         config["matchmaking"].pop("opponent_rating_difference", None)
     else:
         config["matchmaking"]["opponent_rating_difference"] = args.rating_difference
+        if args.rating_below is not None:
+            config["matchmaking"]["opponent_rating_difference_below"] = args.rating_below
     config["engine"]["uci_options"] = dict(UCI_OPTIONS)
     if args.threads > 1:
         config["engine"]["uci_options"]["Threads"] = args.threads
@@ -220,7 +229,8 @@ def main() -> int:
     if args.rating_difference is None:
         opponents = f"bots de {args.opponent_rating[0]} a {args.opponent_rating[1]}"
     else:
-        opponents = f"bots a até {args.rating_difference} pontos do rating do bot"
+        below = args.rating_difference if args.rating_below is None else args.rating_below
+        opponents = f"bots de -{below} a +{args.rating_difference} do rating do bot"
     print(f"matchmaking: {'ligado' if args.matchmaking else 'desligado'}, {opponents}, "
           f"{'rated' if args.rated else 'casual'}, folga {args.move_overhead} ms")
 

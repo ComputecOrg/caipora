@@ -11,12 +11,12 @@ Comandos no Git Bash, na raiz do repositório. `S=root@<servidor>`.
 
 ```bash
 ssh $S 'bash -s' < deploy/server_setup.sh
-scp scripts/lichess-bot-duplicate-gamestart.patch $S:/opt/caipora/
+scp scripts/lichess-bot-*.patch $S:/opt/caipora/
 ssh $S 'chown caipora:caipora /opt/caipora/*.patch; bash -s' < deploy/server_setup.sh
 ```
 
 O script instala o `python3.12-venv`, cria o usuário `caipora` e clona o lichess-bot na mesma versão
-da máquina do dono. Na segunda vez, aplica o patch do `gameStart` repetido.
+da máquina do dono. Na segunda vez, aplica os patches locais (`gameStart` repetido e janela de rating assimétrica).
 
 ## 2. Engine (binário estático, sem depender da glibc do servidor)
 
@@ -41,7 +41,7 @@ A rede vai dentro do executável (D14): não há arquivo `.nnue` para copiar.
 ```bash
 scp scripts/lichess_config.py $S:/opt/caipora/
 ssh $S 'cd /opt/caipora/lichess-bot && runuser -u caipora -- venv/bin/python /opt/caipora/lichess_config.py \
-  --engine /opt/caipora/lichess-bot/engines/caipora-<commit> --threads 2 --rated --matchmaking \n  --rating-difference 300 --move-overhead 1000'
+  --engine /opt/caipora/lichess-bot/engines/caipora-<commit> --threads 2 --rated --matchmaking \n  --rating-difference 300 --rating-below 100 --move-overhead 1000'
 ```
 
 O script gera o `config.yml`, valida com o carregador do próprio lichess-bot e joga duas partidas

@@ -1,0 +1,16 @@
+diff --git a/lib/matchmaking.py b/lib/matchmaking.py
+index 1e20f76..7693c16 100644
+--- a/lib/matchmaking.py
++++ b/lib/matchmaking.py
+@@ -203,7 +203,10 @@ class Matchmaking:
+         rating_diff = match_config.opponent_rating_difference
+         bot_rating = self.perf().get(game_type, {}).get("rating", 0)
+         if rating_diff is not None and bot_rating > 0:
+-            min_rating = bot_rating - rating_diff
++            # Caipora local patch: opponent_rating_difference_below narrows the window below the
++            # bot's rating (e.g. -100/+300); without it the window stays symmetric.
++            below = match_config.lookup("opponent_rating_difference_below")
++            min_rating = bot_rating - (rating_diff if below is None else below)
+             max_rating = bot_rating + rating_diff
+         logger.info(f"Seeking {game_type} game with opponent rating in [{min_rating}, {max_rating}] ...")
+ 

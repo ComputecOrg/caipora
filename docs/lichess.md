@@ -72,6 +72,12 @@ venv\Scripts\python.exe C:\Projetos\ChessAI\scripts\lichess_config.py `
   recalcula a cada desafio. Serve para achar onde o bot está depois que ele já joga rated; a faixa
   absoluta fica de reserva para quando ele não tem rating no ritmo. Desde 27/09/2026 o bot do
   servidor usa ±300 (com rating 2543 havia 59 bots online nessa faixa).
+- `--rating-below N` estreita só o lado de baixo: com `--rating-difference 300 --rating-below 100`
+  a janela é -100/+300. O lichess-bot não tem isso; vem do patch local
+  `scripts/lichess-bot-rating-below.patch` (chave `opponent_rating_difference_below`). Desde
+  01/10/2026 o bot usa -100/+300: o Lichess limita a 100 partidas bot contra bot a cada 24 h,
+  somando todos os ritmos (contra humanos não há limite), então as vagas vão para adversários do
+  nosso nível ou acima.
 
 ## Livro e tablebases (D19)
 
