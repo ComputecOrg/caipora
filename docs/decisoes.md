@@ -355,3 +355,14 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** a engine fica ~23% mais lenta por nó (no servidor do bot, 2 vCPUs);
   redes sem buckets não carregam mais sem recompilar. Voltar é reverter o merge. Pendentes: cache de
   acumuladores por bucket (recupera parte da velocidade) e reajuste da escala.
+
+## D24 — 01/10/2026 — Repositório público (encerra a D7)
+
+- **Decisão do dono:** `ComputecOrg/caipora` passa a público para pôr o link na bio do bot e
+  destravar a CCRL. Antes de abrir, o histórico inteiro foi varrido atrás de tokens, chaves, conta
+  AWS e IPs de servidor: só havia um exemplo `lip_xxxx` no passo a passo e o texto da GPL.
+- **README reescrito** para quem chega: onde o projeto está, aonde quer chegar, a evolução de força
+  e os marcos.
+- **Custo se estiver errada:** o histórico fica público para sempre; um segredo que tivesse escapado
+  à varredura teria de ser revogado na hora.
+
