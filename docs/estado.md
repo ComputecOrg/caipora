@@ -2,8 +2,12 @@
 
 ## v3.6 — 30/09/2026 (rede g6 com buckets, extensões singulares, tempo por estabilidade)
 
-- **Força estimada:** ainda sem gauntlet. Pelos SPRTs, bem acima da v3.5 (os ganhos não somam
-  exatamente).
+- **Força estimada: ~3508 ± 23 CCRL Blitz** com 1 thread (+~54 sobre a v3.5), **acima do Tucano
+  (3491)**. Gauntlet na AWS em 01/10/2026 a 8+0.08, 300 partidas por adversário, todas com
+  terminação normal (`tools/aws-sprt/gauntlet-v3.6/`): Stash 33 80,2% (=> 3516), Stash 37 62,0%
+  (=> 3504).
+- **Primeira release pública:** 3.6 (`Cargo.toml` passou de 0.1.0 a 3.6.0), binários Windows e
+  Linux, AVX2 e x86-64 genérico.
 - **O que entrou** (todos com terminação normal; logs em `tools/aws-sprt/`):
   - rede g6 (D23): king buckets espelhados + output buckets, só dados do Lc0. SPRT de relógio
     contra a g5: **+22,9 ± 12,2** em 1036 partidas (local, à parte: +17,8 ± 14,2 em 800);
