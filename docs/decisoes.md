@@ -331,3 +331,27 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   53,8% → **~3454 ± 22 CCRL Blitz**.
 - **Custo se estiver errada:** a engine fica ~23% mais lenta por nó (no servidor do bot, 2 vCPUs,
   isso pesa); redes de 512 não carregam mais sem recompilar. Voltar é reverter o commit.
+
+## D23 — 30/09/2026 — A g6 entra com king buckets espelhados e output buckets
+
+- **Decisão:** `net/caipora-g6.nnue` substitui a g5 dentro do executável e a arquitetura passa a
+  (768·8 → 1024)×2 → 8: 8 king buckets com espelhamento horizontal pela coluna do rei (layout
+  próprio: a1, b1, c1 e d1 sozinhos; segunda fileira em dois; terceira e quarta juntas; quinta
+  fileira em diante juntas) e 8 output buckets pelo número de peças ((peças − 2) / 4). O
+  acumulador do lado cujo rei troca de bucket ou de metade é recalculado do zero. `SCALE` continua
+  280.
+- **Procedência:** só dados do Lc0 (ODbL, D20), os mesmos três binpacks da g5, agora intercalados
+  bloco a bloco (um bloco de cada arquivo por vez, lotes embaralhados de 16 milhões de posições,
+  sem cópia em disco); só posições calmas; wdl 0; factoriser somado a cada bucket ao salvar; 120
+  blocos de 100 milhões (12 bilhões vistos, 9 h 23 min na GTX 1660 a ~350 mil posições/s, com a
+  GPU em 99%: o gargalo é a rede, não a leitura); lr 0,001 com cosseno; época 120.
+- **Conferência:** avaliação da engine contra o treinador em ponto flutuante × 0,70, em 7 posições:
+  diferença de 0 a 6 cp; posições simétricas dão o mesmo valor.
+- **Validação** (as mesmas 205 mil posições da D22): época 30 0,011887; 60 0,011384; 90 0,010790;
+  **120 0,010377**; g5 0,011355. Ainda caindo na última época.
+- **Por quê:** SPRT de relógio (8+0.08) contra a g5, na AWS: **+22,9 ± 12,2** em 1036 partidas
+  (H1); um match local à parte deu +17,8 ± 14,2 em 800. Já paga os ~23% de nós/s a menos
+  (472 mil contra 611 mil no bench do WSL).
+- **Custo se estiver errada:** a engine fica ~23% mais lenta por nó (no servidor do bot, 2 vCPUs);
+  redes sem buckets não carregam mais sem recompilar. Voltar é reverter o merge. Pendentes: cache de
+  acumuladores por bucket (recupera parte da velocidade) e reajuste da escala.

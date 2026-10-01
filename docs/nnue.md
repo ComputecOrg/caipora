@@ -1,12 +1,15 @@
 # NNUE: dos dados à rede na engine
 
-Tudo com dados do próprio Caipora (D2). A arquitetura é a mesma em três lugares, que precisam
+Dados do próprio Caipora ou do Lc0 (ODbL, D20). A arquitetura é a mesma em três lugares, que precisam
 bater: `src/nnue.rs` (inferência), `trainer/src/main.rs` (treino) e o arquivo da rede.
 
-- Arquitetura: (768 → 1024)×2 → 1, SCReLU (até a g2, 256; g3 e g4, 512; a g5 passou a 1024, D22).
+- Arquitetura: (768·8 → 1024)×2 → 8, SCReLU, com 8 king buckets espelhados pela coluna do rei e 8
+  output buckets pelo número de peças (desde a g6, D23; até a g2, 256 sem buckets; g3 e g4, 512;
+  g5, 1024 sem buckets, D22). O layout dos buckets (`KING_BUCKETS`) é o mesmo na engine e no
+  treinador.
 - Quantização: QA = 255, QB = 64; escala 400 no treinador e 280 na engine (`SCALE`, D21: a g4
   aprendeu na escala dos dados do Lc0, e 0,70 dela foi a melhor em partidas).
-- Arquivo: 1.579.072 bytes (com 512, 789.568; com 256, 394.816).
+- Arquivo: 12.617.792 bytes (g5, sem buckets: 1.579.072).
 - O tamanho da camada oculta é `HIDDEN` em `src/nnue.rs` e `CAIPORA_HIDDEN` no treinador
   (6º argumento do `wsl_train.sh`); uma rede só carrega numa engine compilada com o mesmo valor.
 
@@ -82,7 +85,7 @@ caipora-trainer g1.bin caipora-g1 <superbatches> [lotes por superbatch] [wdl] [l
 
 ## Rede embutida
 
-`net/caipora-g5.nnue` vai dentro do executável (D14, D16, D18, D21, D22) e é a avaliação padrão. Pela opção
+`net/caipora-g6.nnue` vai dentro do executável (D14, D16, D18, D21, D22, D23) e é a avaliação padrão. Pela opção
 `EvalFile`:
 
 | Valor | Avaliação |

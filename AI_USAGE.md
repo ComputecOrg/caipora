@@ -32,7 +32,8 @@ the code can judge it with full information.
   community. Every network trained on it says so in its release notes and in the repository's
   decision log. (Until then the policy was self-play only.) The first such network is g4
   (28/09/2026), trained on `test80-mar2023-2tb7p-filter-v6-sk16` only; g5 (30/09/2026) adds
-  `test80-jun2023-2tb7p` and `test80-aug2023-2tb7p`.
+  `test80-jun2023-2tb7p` and `test80-aug2023-2tb7p`; g6 (30/09/2026) uses the same three
+  datasets, interleaved.
 - No third-party networks are used, as weights or as a starting point.
 - The origin of each dataset (which network generated it, how many positions, search limits)
   is recorded in the repository.
