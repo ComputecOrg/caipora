@@ -33,6 +33,11 @@ const FUTILITY_MARGIN: i32 = 100;
 const SEE_PRUNE_MAX_DEPTH: i32 = 8;
 const SEE_QUIET_MARGIN: i32 = 50;
 const SEE_CAPTURE_MARGIN: i32 = 100;
+const SINGULAR_MIN_DEPTH: i32 = 8;
+/// A entrada da TT serve de referência se for no máximo tão mais rasa que o nó.
+const SINGULAR_TT_DEPTH_MARGIN: i32 = 3;
+/// Margem por nível abaixo da pontuação da TT que as alternativas precisam alcançar.
+const SINGULAR_MARGIN: i32 = 2;
 
 /// Quantos lances um nó de profundidade `depth` busca antes de o LMP podar os quietos restantes.
 fn lmp_threshold(depth: i32, improving: bool) -> usize {
@@ -517,6 +522,7 @@ fn new_state<'a>(
         pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
         after_null: vec![false; MAX_PLY + 2],
         moved: vec![None; MAX_PLY + 2],
+        excluded: vec![None; MAX_PLY + 2],
     }
 }
 
@@ -555,6 +561,9 @@ struct SearchState<'a> {
     after_null: Vec<bool>,
     /// `moved[ply]`: lance jogado nesse nível no caminho atual (`None` para o lance nulo).
     moved: Vec<Option<PieceTo>>,
+    /// `excluded[ply]`: lance que a busca desse nível ignora (a busca singular testa se as
+    /// alternativas ao lance da TT chegam perto dele).
+    excluded: Vec<Option<Move>>,
     network: Option<&'a Network>,
     /// `accumulators[ply]`: camada oculta da rede na posição desse nível (vazio sem rede).
     accumulators: Vec<Accumulators>,
@@ -683,10 +692,12 @@ impl SearchState<'_> {
         self.seldepth = self.seldepth.max(ply);
         self.killers[ply + 1] = [None, None];
 
+        let excluded = self.excluded[ply];
         let entry = self.tt.probe(pos.hash());
         let tt_move = entry.and_then(|e| e.mv);
         if let Some(entry) = entry
             && !pv_node
+            && excluded.is_none()
             && entry.depth >= depth
         {
             let score = score_from_tt(entry.score, ply);
@@ -721,7 +732,7 @@ impl SearchState<'_> {
             depth -= 1;
         }
 
-        if !pv_node && !in_check && ply > 0 && beta.abs() < MATE_BOUND {
+        if !pv_node && !in_check && ply > 0 && excluded.is_none() && beta.abs() < MATE_BOUND {
             // Reverse futility: tão acima de beta que nem uma perda de `margem` por nível muda nada.
             if depth <= RFP_MAX_DEPTH && static_eval - RFP_MARGIN * depth >= beta {
                 return static_eval;
@@ -777,13 +788,50 @@ impl SearchState<'_> {
         let mut quiets_tried = MoveList::new();
         for index in 0..moves.len() {
             let mv = pick_next(&mut moves, &mut scores, index);
+            if Some(mv) == excluded {
+                continue;
+            }
             let next = pos.make_move(mv);
             if next.is_attacked(next.king_square(us), next.side_to_move()) {
                 continue;
             }
             legal += 1;
             let quiet = !is_tactical(pos, mv);
-            let new_depth = depth - 1;
+            let mut extension = 0;
+            // Extensão singular: se nenhuma alternativa ao lance da TT chega perto da pontuação
+            // dele numa busca mais rasa, ele é o único bom lance e merece um nível a mais. Se até
+            // sem ele a busca passa de beta, há vários lances bons e o nó corta ("multi-cut").
+            if let Some(entry) = entry
+                && Some(mv) == tt_move
+                && ply > 0
+                && excluded.is_none()
+                && depth >= SINGULAR_MIN_DEPTH
+                && ply < 2 * self.root_depth as usize
+                && entry.depth >= depth - SINGULAR_TT_DEPTH_MARGIN
+                && entry.bound != Bound::Upper
+                && score_from_tt(entry.score, ply).abs() < MATE_BOUND
+            {
+                let singular_beta = score_from_tt(entry.score, ply) - SINGULAR_MARGIN * depth;
+                self.excluded[ply] = Some(mv);
+                let score = self.negamax(
+                    pos,
+                    (depth - 1) / 2,
+                    singular_beta - 1,
+                    singular_beta,
+                    ply,
+                    false,
+                );
+                self.excluded[ply] = None;
+                if self.stopped {
+                    return 0;
+                }
+                if score < singular_beta {
+                    extension = 1;
+                } else if singular_beta >= beta {
+                    return singular_beta;
+                }
+            }
+            let new_depth = depth - 1 + extension;
             let prunable = !pv_node && !in_check && best_score > -MATE_BOUND && !next.in_check();
             if prunable && depth <= SEE_PRUNE_MAX_DEPTH {
                 // Lance que, na troca de peças na casa de destino, perde material demais para a
@@ -872,7 +920,15 @@ impl SearchState<'_> {
             }
         }
         if legal == 0 {
+            // Na busca singular, sem alternativa ao lance excluído: falha baixo (ele é singular).
+            if excluded.is_some() {
+                return alpha;
+            }
             return if in_check { -MATE + ply as i32 } else { 0 };
+        }
+        if excluded.is_some() {
+            // Resultado sem o melhor lance: não vale para a TT nem para a correção.
+            return best_score;
         }
         let bound = if best_score >= beta {
             Bound::Lower
@@ -996,7 +1052,7 @@ impl SearchState<'_> {
     fn raw_eval(&self, pos: &Position, ply: usize) -> i32 {
         let score = match self.network {
             Some(net) => {
-                let score = net.output(&self.accumulators[ply], pos.side_to_move());
+                let score = net.output(&self.accumulators[ply], pos);
                 // Em debug, confere o incremental contra o cálculo do zero, por amostragem para o
                 // build de debug seguir jogável (o CI joga partidas com relógio).
                 if cfg!(debug_assertions) && self.nodes.is_multiple_of(64) {
@@ -1679,6 +1735,25 @@ mod tests {
             .start(&pos, &[], &limits, &stop)
             .quiescence(&pos, -INFINITY, INFINITY, 0);
         assert_eq!(score, 777);
+    }
+
+    #[test]
+    fn a_search_excluding_the_only_move_fails_low_and_leaves_the_tt_alone() {
+        let stop = AtomicBool::new(false);
+        let limits = Limits::default();
+        let mut searcher = Searcher::new(16);
+        // Xeque da dama em g2: Kxg2 é o único lance. Sem ele, não é mate: a busca falha baixo.
+        let pos = Position::from_fen("k7/8/8/8/8/8/6q1/7K w - - 0 1").unwrap();
+        let only = generate_legal(&pos).iter().next().unwrap();
+        searcher
+            .tt
+            .store(pos.hash(), Some(only), 50, 20, Bound::Lower);
+        let mut state = searcher.start(&pos, &[], &limits, &stop);
+        state.excluded[1] = Some(only);
+        let score = state.negamax(&pos, 3, -100, 100, 1, false);
+        assert_eq!(score, -100);
+        let entry = searcher.tt.probe(pos.hash()).unwrap();
+        assert_eq!((entry.mv, entry.score, entry.depth), (Some(only), 50, 20));
     }
 
     #[test]
