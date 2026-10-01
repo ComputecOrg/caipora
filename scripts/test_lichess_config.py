@@ -35,6 +35,16 @@ class RatingWindow(unittest.TestCase):
         self.assertEqual(matchmaking["opponent_min_rating"], 2000)
         self.assertEqual(matchmaking["opponent_max_rating"], 2600)
 
+    def test_the_window_below_can_be_narrower(self):
+        # -100/+300: o patch local do lichess-bot lê o limite de baixo à parte.
+        matchmaking = build("--rating-difference", "300", "--rating-below", "100")["matchmaking"]
+        self.assertEqual(matchmaking["opponent_rating_difference"], 300)
+        self.assertEqual(matchmaking["opponent_rating_difference_below"], 100)
+
+    def test_without_a_window_below_the_window_is_symmetric(self):
+        matchmaking = build("--rating-difference", "300")["matchmaking"]
+        self.assertNotIn("opponent_rating_difference_below", matchmaking)
+
 
 class Matchmaking(unittest.TestCase):
     def test_the_bot_challenges_again_after_one_idle_minute(self):
