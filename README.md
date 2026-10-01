@@ -8,7 +8,7 @@
 [![Written with Claude Code](https://img.shields.io/badge/written%20with-Claude%20Code-555)](AI_USAGE.md)
 
 Caipora is named after a forest guardian of Brazilian folklore. It started on 26 September 2026
-with an empty repository and went from ~1950 to ~3450 CCRL Blitz (estimated) in five days. The
+with an empty repository and went from ~1950 to ~3500 CCRL Blitz (estimated) in five days. The
 code is written by [Claude Code](https://claude.com/claude-code) under the direction, review and
 testing of its author, and that is declared everywhere: see [AI_USAGE.md](AI_USAGE.md).
 
@@ -21,7 +21,7 @@ testing of its author, and that is declared everywhere: see [AI_USAGE.md](AI_USA
 | | |
 |---|---|
 | **Version** | 3.6 (30 September 2026) |
-| **Strength** | ~3454 CCRL Blitz estimated for v3.5 (gauntlet vs Stash, 1 thread); v3.6 measured above it, gauntlet pending |
+| **Strength** | ~3508 ± 23 CCRL Blitz, estimated (gauntlet vs Stash, 1 thread, 600 games) |
 | **Lichess** | caiporaBot, blitz 2854 after 361 games (1 October 2026) |
 | **Evaluation** | NNUE (768×8 king buckets → 1024)×2 → 8 output buckets, SCReLU, trained in-house with [bullet](https://github.com/jw1912/bullet) on Leela Chess Zero data (ODbL) |
 | **Search** | alpha-beta with PVS and singular extensions, Lazy SMP, pondering |
@@ -32,9 +32,9 @@ testing of its author, and that is declared everywhere: see [AI_USAGE.md](AI_USA
 
 | Goal | Status |
 |---|---|
-| Pass **Tucano** (3491), the strongest Brazilian engine | about 35 points away (v3.5); v3.6 should be close |
+| Pass **Tucano** (3491), the strongest Brazilian engine | passed by the estimate (v3.6, ~3508); to be confirmed by CCRL |
 | **3000 blitz** on Lichess | 2854 and climbing |
-| Official **CCRL** listing | repository public since 1 October 2026; first release next |
+| Official **CCRL** listing | first public release, 3.6, on 1 October 2026 |
 | **TCEC** | after CCRL |
 
 ## Strength so far
@@ -45,9 +45,9 @@ known CCRL Blitz ratings, at 8+0.08 with 1 thread (80 to 300 games per opponent)
 ```mermaid
 xychart-beta
     title "Estimated CCRL Blitz by version"
-    x-axis ["v1", "v2", "v3", "v3.1", "v3.2", "v3.3", "v3.4", "v3.5"]
+    x-axis ["v1", "v2", "v3", "v3.1", "v3.2", "v3.3", "v3.4", "v3.5", "v3.6"]
     y-axis "Elo" 1800 --> 3600
-    line [1950, 2440, 2815, 2879, 3108, 3242, 3435, 3454]
+    line [1950, 2440, 2815, 2879, 3108, 3242, 3435, 3454, 3508]
 ```
 
 | Version | Date | Estimate | What made the difference |
@@ -60,7 +60,7 @@ xychart-beta
 | v3.3 | 28 Sep | ~3242 | pondering and network g3 (512 hidden) |
 | v3.4 | 28 Sep | ~3435 | network g4, first one trained on Leela Chess Zero data |
 | v3.5 | 30 Sep | ~3454 | network g5 (1024 hidden) |
-| v3.6 | 30 Sep | pending | network g6 with king buckets (+23), singular extensions (+28), time by best-move stability (+16) |
+| v3.6 | 30 Sep | ~3508 | network g6 with king buckets (+23), singular extensions (+28), time by best-move stability (+16) |
 
 The full log, with every SPRT and gauntlet, is in [docs/estado.md](docs/estado.md) (Portuguese).
 
@@ -75,6 +75,7 @@ The full log, with every SPRT and gauntlet, is in [docs/estado.md](docs/estado.m
 | 28 Sep 2026 | 200-game match against Stockfish 19 (1 thread each): 7.5% of the points |
 | 30 Sep 2026 | Lichess blitz 2823; king-bucket network g6 and singular extensions |
 | 1 Oct 2026 | Lichess blitz 2854; repository made public; bot joins the Lichess bot tournament circuit |
+| 1 Oct 2026 | v3.6 estimated at ~3508 CCRL, past Tucano; first public release |
 
 ## How it is built
 
