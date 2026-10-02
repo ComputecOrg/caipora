@@ -12,7 +12,9 @@ use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
 use crate::nnue::{Accumulators, Network, RefreshCache};
 use crate::position::Position;
 use crate::see::{SEE_VALUE, see};
-use crate::timeman::{Limits, iteration_time_scale, should_start_iteration_scaled};
+use crate::timeman::{
+    Limits, NEUTRAL_NODE_FRACTION, iteration_time_scale, should_start_iteration_scaled,
+};
 use crate::tt::{Bound, TranspositionTable};
 use crate::tune;
 use crate::types::{Color, Piece, PieceType, Square};
@@ -657,7 +659,10 @@ impl Searcher {
                 } else {
                     stability = 0;
                 }
-                let time_scale = iteration_time_scale(stability, score_drop);
+                let best_fraction = pv.first().map_or(NEUTRAL_NODE_FRACTION, |&mv| {
+                    state.best_move_node_fraction(mv)
+                });
+                let time_scale = iteration_time_scale(stability, score_drop, best_fraction);
                 best = SearchResult {
                     best_move: pv.first().copied().or(best.best_move),
                     score,
@@ -764,7 +769,14 @@ fn new_state<'a>(
         quiet_played: vec![None; MAX_PLY + 2],
         threats: vec![Bitboard::EMPTY; MAX_PLY + 2],
         excluded: vec![None; MAX_PLY + 2],
+        root_move_nodes: vec![0; 64 * 64],
     }
+}
+
+/// Posição de um lance em `root_move_nodes`: origem e destino (as promoções de uma mesma casa
+/// dividem a conta, o que basta para medir concentração).
+fn root_move_index(mv: Move) -> usize {
+    mv.from().index() * 64 + mv.to().index()
 }
 
 /// Estado de uma busca em andamento.
@@ -813,6 +825,9 @@ struct SearchState<'a> {
     /// `excluded[ply]`: lance que a busca desse nível ignora (a busca singular testa se as
     /// alternativas ao lance da TT chegam perto dele).
     excluded: Vec<Option<Move>>,
+    /// Nós gastos sob cada lance da raiz desde o começo da busca, por origem e destino; a gestão de
+    /// tempo mede por eles quanto a busca se concentra no melhor lance.
+    root_move_nodes: Vec<u64>,
     network: Option<&'a Network>,
     /// `accumulators[ply]`: camada oculta da rede na posição desse nível (vazio sem rede).
     accumulators: Vec<Accumulators>,
@@ -821,6 +836,19 @@ struct SearchState<'a> {
 }
 
 impl SearchState<'_> {
+    /// Nós gastos sob o lance `mv` da raiz desde o começo da busca.
+    fn root_nodes_of(&self, mv: Move) -> u64 {
+        self.root_move_nodes[root_move_index(mv)]
+    }
+
+    /// Fatia dos nós da busca gastos sob `best` (0 se ainda não houve nó).
+    fn best_move_node_fraction(&self, best: Move) -> f64 {
+        if self.nodes == 0 {
+            return 0.0;
+        }
+        self.root_nodes_of(best) as f64 / self.nodes as f64
+    }
+
     /// Aprofundamento iterativo de um thread auxiliar: busca até `max_depth` ou até mandarem
     /// parar, sem reportar; o que acha chega ao principal pela TT.
     fn iterate_quietly(&mut self, root: &Position, max_depth: u32) {
@@ -1134,6 +1162,7 @@ impl SearchState<'_> {
                 .map(|piece| PieceTo { piece, to: mv.to() });
             self.quiet_played[ply] = quiet.then_some(mv);
             self.push_move(pos, &next, mv, ply);
+            let nodes_before = self.nodes;
             let score = if legal == 1 {
                 -self.negamax(
                     &next,
@@ -1197,6 +1226,9 @@ impl SearchState<'_> {
                 score
             };
             self.hashes.pop();
+            if ply == 0 {
+                self.root_move_nodes[root_move_index(mv)] += self.nodes - nodes_before;
+            }
             if self.stopped {
                 return 0;
             }
@@ -1762,6 +1794,29 @@ mod tests {
             (0..2048).any(|_| state.should_stop()),
             "não parou no ponderhit"
         );
+    }
+
+    #[test]
+    fn root_move_nodes_add_up_to_the_search_and_favour_the_best_move() {
+        // Os nós gastos sob cada lance da raiz somam quase tudo o que a busca gastou (falta só o
+        // próprio nó raiz de cada passada), e o melhor lance fica com a maior fatia.
+        let limits = Limits::default();
+        let stop = AtomicBool::new(false);
+        let mut searcher = Searcher::new(16);
+        let pos = Position::startpos();
+        let mut state = searcher.start(&pos, &[], &limits, &stop);
+        let mut score = 0;
+        for depth in 1..=7 {
+            score = state.aspiration(&pos, depth, score);
+        }
+        let best = state.pv[0][0];
+        let total: u64 = state.root_move_nodes.iter().sum();
+        assert!(total > 0 && total < state.nodes, "{total} {}", state.nodes);
+        assert!(state.nodes - total < 100, "{total} {}", state.nodes);
+        let best_nodes = state.root_nodes_of(best);
+        assert_eq!(state.root_move_nodes.iter().max(), Some(&best_nodes));
+        assert!(state.best_move_node_fraction(best) > 0.0);
+        assert!(state.best_move_node_fraction(best) < 1.0);
     }
 
     #[test]
