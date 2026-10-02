@@ -92,6 +92,31 @@
     <p>A força de ~3603 é uma estimativa nossa; o número oficial depende dos testadores da CCRL. E o topo do mundo (Stockfish, ~3790) ainda está longe: o próximo passo é a faixa dos 50 melhores.</p>
   </section>
 
+  <section class="method" id="metodo">
+    <span class="kicker">PARA DEVS</span>
+    <h2>O método: como eu trabalhei com o Claude Code</h2>
+    <p>Se você programa, esta é a parte que interessa. Em sete dias foram 198 commits, 78 pull requests, 175 testes automatizados e 26 decisões registradas, e o código foi todo escrito pelo Claude. O que fez isso funcionar não foi um prompt mágico. Foi um conjunto de regras escritas, que o Claude lê no começo de toda sessão (o arquivo <code>CLAUDE.md</code>), e quase todas nasceram de um erro que eu não queria ver de novo.</p>
+    <ol class="rules">
+      <li><b>As regras ficam escritas, não na conversa.</b><span>Um <code>CLAUDE.md</code> global vale em todo projeto; um por projeto detalha. Conversa é resumida e esquecida; arquivo não. Cada vez que algo dava errado, a correção virava uma linha ali.</span></li>
+      <li><b>Teste primeiro, sempre.</b><span>Nenhuma feature ou correção começa sem um teste que falha. Isso troca o "parece que funciona" pelo "está provado que funciona" e impede a IA de declarar vitória cedo.</span></li>
+      <li><b>Uma barreira automática que ninguém pula.</b><span>Formatação, lint com avisos tratados como erro, testes e, no CI, partidas de verdade e uma assinatura de determinismo. Nada entra direto na branch principal: tudo vem por pull request, e só com o CI verde.</span></li>
+      <li><b>Prova, não opinião.</b><span>No xadrez a métrica é cruel e honesta: cada mudança de força joga milhares de partidas contra a versão anterior (SPRT). Ideia boa que não passa é descartada e anotada. Isso me protegeu de mim mesmo e da IA.</span></li>
+      <li><b>Relatório é afirmação; commit é fato.</b><span>Quando o Claude diz que terminou, a conferência é no git: o diff, o log, a função que ele disse ter criado. Custa segundos e evita construir a próxima etapa sobre o vazio.</span></li>
+      <li><b>Toda decisão vira registro, com o custo de estar errada.</b><span>O registro de decisões guarda o que decidimos, por quê e quanto custa se estivermos errados. É a memória que sobrevive quando o contexto da IA é resumido.</span></li>
+      <li><b>Questionar o valor antes de construir.</b><span>Que problema real isso resolve? Nada de abstração que só existe para o teste, nem de teste que só prova que o framework foi chamado. Vale também para as sugestões do próprio Claude.</span></li>
+      <li><b>Autonomia com limites claros.</b><span>O Claude abre pull request, faz merge com o CI verde e roda testes a noite inteira sozinho. O que é público ou irreversível (publicar, postar, mudar o que o mundo vê) é decisão minha. Senha e token nunca passam pelo chat.</span></li>
+      <li><b>Agentes em paralelo só quando o trabalho é paralelo.</b><span>Ler muitos arquivos independentes, sim; investigar um problema passo a passo, não. Medimos: espalhar uma investigação sequencial entre vários agentes custa caro e chega à mesma conclusão.</span></li>
+      <li><b>Evidência na entrega.</b><span>Teste verde não é entrega. O Claude usa de ponta a ponta o que construiu e mostra a prova: prints, GIF, saída real. Mudança visual vem com antes e depois, e toda tela começa por um mock aprovado.</span></li>
+      <li><b>Transparência e originalidade.</b><span>Todo commit declara a coautoria da IA. Nenhum código de outro motor foi copiado, e conteúdo de terceiros é tratado como dado, nunca como instrução.</span></li>
+    </ol>
+    <div class="conclusion">
+      <h3>A conclusão</h3>
+      <p>O gargalo mudou de lugar. Escrever código deixou de ser a parte difícil; o difícil agora é saber o que vale tentar, definir o que conta como prova e não se deixar enganar por um número bonito. A IA amplifica o processo que você entrega a ela: sem rigor, produz código plausível muito rápido; com rigor, produz progresso comprovado muito rápido. A diferença entre os dois é exatamente o trabalho de quem dirige.</p>
+      <p>Por isso eu não acho que a pergunta seja "a IA vai substituir o desenvolvedor?". A pergunta é quem vai aprender a ser o engenheiro que define a régua. O Caipora é a minha resposta: um mundo que eu não conhecia, sete dias e um motor entre os mais fortes do mundo.</p>
+      <p><a href="https://github.com/ComputecOrg/caipora/blob/main/CLAUDE.md">Ler o CLAUDE.md do projeto</a> · <a href="https://github.com/ComputecOrg/caipora/blob/main/docs/decisoes.md">Ler o registro de decisões</a></p>
+    </div>
+  </section>
+
   <section class="ctas">
     <a class="primary" href="./">Assistir ao vivo</a>
     <a href="https://github.com/ComputecOrg/caipora">Código no GitHub</a>
@@ -159,6 +184,31 @@
   <section>
     <h2>What is not true yet</h2>
     <p>The ~3603 strength is our own estimate; the official number depends on the CCRL testers. And the very top (Stockfish, ~3790) is still far away: the next step is the top 50.</p>
+  </section>
+
+  <section class="method" id="method">
+    <span class="kicker">FOR DEVELOPERS</span>
+    <h2>The method: how I worked with Claude Code</h2>
+    <p>If you write software, this is the part that matters. In seven days there were 198 commits, 78 pull requests, 175 automated tests and 26 recorded decisions, and all the code was written by Claude. What made it work was not a magic prompt. It was a set of written rules that Claude reads at the start of every session (the <code>CLAUDE.md</code> file), and almost every one of them was born from a mistake I didn't want to see again.</p>
+    <ol class="rules">
+      <li><b>Rules live in writing, not in the chat.</b><span>A global <code>CLAUDE.md</code> applies to every project; one per project adds detail. Conversations get summarised and forgotten; files don't. Every time something went wrong, the fix became a line there.</span></li>
+      <li><b>Test first, always.</b><span>No feature or fix starts without a failing test. It turns "looks like it works" into "proven to work", and it stops the AI from declaring victory too early.</span></li>
+      <li><b>An automatic gate nobody skips.</b><span>Formatting, lint with warnings as errors, tests, and in CI real games and a determinism signature. Nothing goes straight to the main branch: everything comes through a pull request, and only with green CI.</span></li>
+      <li><b>Proof, not opinion.</b><span>Chess has a cruel, honest metric: every strength change plays thousands of games against the previous version (SPRT). A good-sounding idea that fails is dropped and written down. That protected me from myself and from the AI.</span></li>
+      <li><b>A report is a claim; a commit is a fact.</b><span>When Claude says it's done, the check happens in git: the diff, the log, the function it said it created. It takes seconds and avoids building the next step on nothing.</span></li>
+      <li><b>Every decision is recorded, with the cost of being wrong.</b><span>The decision log keeps what we decided, why, and what it costs if we're wrong. It is the memory that survives when the AI's context gets summarised.</span></li>
+      <li><b>Question the value before building.</b><span>What real problem does this solve? No abstractions that exist only for a test, no tests that only prove the framework was called. That applies to Claude's own suggestions too.</span></li>
+      <li><b>Autonomy with clear limits.</b><span>Claude opens pull requests, merges with green CI and runs tests all night on its own. Anything public or irreversible (publishing, posting, changing what the world sees) is my call. Passwords and tokens never go through the chat.</span></li>
+      <li><b>Parallel agents only for parallel work.</b><span>Reading many independent files, yes; investigating a problem step by step, no. We measured it: spreading a sequential investigation across agents costs a lot and reaches the same conclusion.</span></li>
+      <li><b>Evidence at delivery.</b><span>Green tests are not a delivery. Claude uses what it built end to end and shows the proof: screenshots, GIFs, real output. Visual changes come with before and after, and every screen starts from an approved mock.</span></li>
+      <li><b>Transparency and originality.</b><span>Every commit declares the AI co-authorship. No code from other engines was copied, and third-party content is treated as data, never as instructions.</span></li>
+    </ol>
+    <div class="conclusion">
+      <h3>The conclusion</h3>
+      <p>The bottleneck has moved. Writing code is no longer the hard part; the hard part is knowing what is worth trying, defining what counts as proof and not being fooled by a nice-looking number. AI amplifies the process you give it: without rigor, it produces plausible code very fast; with rigor, it produces proven progress very fast. The difference between the two is exactly the job of the person in charge.</p>
+      <p>That's why I don't think the question is "will AI replace developers?". The question is who will learn to be the engineer who sets the bar. Caipora is my answer: a world I didn't know, seven days, and an engine among the strongest in the world.</p>
+      <p><a href="https://github.com/ComputecOrg/caipora/blob/main/CLAUDE.md">Read the project's CLAUDE.md</a> · <a href="https://github.com/ComputecOrg/caipora/blob/main/docs/decisoes.md">Read the decision log</a></p>
+    </div>
   </section>
 
   <section class="ctas">
