@@ -9,6 +9,10 @@ publish = false
 
 [dependencies]
 
+[features]
+# Parâmetros da busca como opções UCI, para o SPSA (src/tune.rs). Nunca no build que joga.
+tune = []
+
 [lints.rust]
 unsafe_code = "deny"
 
