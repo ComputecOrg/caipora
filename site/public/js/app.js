@@ -399,7 +399,7 @@ async function loadChips() {
 }
 
 function renderRanking(ranking) {
-  $("ranking-meta").textContent = `${ranking.total} ranked bots · updated ${ranking.updated ?? "–"}`;
+  $("ranking-meta").textContent = `${ranking.total} ranked bots · ${ranking.live ? "live ratings" : "list"} · ${ranking.updated ?? "–"}`;
   const rows = [];
   ranking.rows.forEach((r, i) => {
     if (i > 0 && r.rank - ranking.rows[i - 1].rank > 1) rows.push(el("tr", { class: "gap" }, el("td", { colspan: "4" })));
@@ -517,6 +517,8 @@ loadChips();
 loadGames();
 route();
 watchLive();
+// Ranking e ratings do topo a cada minuto (a função da Vercel guarda o resultado por 60 s).
+setInterval(loadChips, 60000);
 setInterval(() => {
   setStatus();
   if (game.mode === "idle") watchLive();
