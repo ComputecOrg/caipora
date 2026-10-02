@@ -1,5 +1,28 @@
 # Estado do Caipora
 
+## v3.7 — 02/10/2026 (noite de busca e velocidade, régua [0, 5])
+
+- **Força estimada: ~3572 ± 24 CCRL Blitz** com 1 thread (+~64 sobre a v3.6). Gauntlet na AWS a
+  8+0.08, 300 partidas por adversário, todas com terminação normal
+  (`tools/aws-sprt/gauntlet-pack1/`): Stash 33 85,5% (=> 3581), Stash 37 70,2% (=> 3568). Pela lista
+  CCRL de 26/09/2026, região do 78º lugar.
+- **SPRT do pacote contra a v3.6** (STC 8+0.08, [0, 5]): **+48,6 ± 11,8** em 882 partidas (H1).
+- **O que entrou** (cada um contra a v3.6, STC 8+0.08, [0, 5], D25; todos com terminação normal):
+  - cut node e LMR mais rica (capturas e xeques também reduzem, menos; mais em cut node, menos
+    melhorando; re-busca um nível mais funda ou mais rasa): **+11,1 ± 5,6** em 3613 (#68);
+  - histórico de quietos por balde de ameaça, continuação de 4 meios-lances e bônus ao lance do
+    pai quando o nó falha baixo: **+20,2 ± 7,9** em 1932 (#69);
+  - cache de acumuladores por bucket do rei e atualização numa passada só, sem mudar a avaliação
+    (bench idêntico), ~+12% de nós/s: **+21,9 ± 8,0** em 1679 (#70);
+  - histórico de capturas com ameaça na casa de destino, na ordem e na fronteira de SEE entre
+    capturas boas e ruins: **+6,1 ± 3,9** em 7119 (#71; reprovada em [0, 10] na versão antiga).
+- **Reprovadas ou sem ganho:**
+  - escala da avaliação pelo material: −5,4 ± 5,2 depois de 5000 partidas (parada perto do H0);
+  - segundo estágio da g6 com wdl 0,3: −4,2 ± 5,5 contra a g6 (a variante wdl 0,6 nem treinou).
+- **No bot desde 02/10/2026, ~03h40** (`caipora-89360b4`); config anterior em
+  `config.yml.bak-a854a73`.
+- **Bench:** 6011459.
+
 ## v3.6 — 30/09/2026 (rede g6 com buckets, extensões singulares, tempo por estabilidade)
 
 - **Força estimada: ~3508 ± 23 CCRL Blitz** com 1 thread (+~54 sobre a v3.5), **acima do Tucano

@@ -366,3 +366,17 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** o histórico fica público para sempre; um segredo que tivesse escapado
   à varredura teria de ser revogado na hora.
 
+## D25 — 02/10/2026 — Régua fina: SPRT de relógio [0, 5] e um pacote confirmado contra a versão anterior
+
+- **Decisão:** mudança de busca e de avaliação passa a ser testada no relógio (STC 8+0.08, Hash 16,
+  8moves_v3) com limites **[0, 5]**, e não mais [0, 10] em nós fixos; cada ideia é medida sozinha
+  contra a versão em produção, e o conjunto que entra na main é confirmado por um SPRT do pacote
+  contra a versão anterior e por um gauntlet antes de ir para o bot.
+- **Por quê:** o estudo do Reckless e de engines do top 50 (01/10/2026) mostrou que entre ~3500 e
+  ~3750 o ganho vem de muitas mudanças de +2 a +8 Elo, que a régua [0, 10] descartava como
+  neutras. Na primeira noite com a régua nova, o histórico de capturas passou com +6,1 ± 3,9; na
+  régua antiga ele tinha sido reprovado.
+- **Custo se estiver errada:** com [0, 5], cerca de 5% dos aprovados são falsos positivos de poucos
+  Elo; o SPRT do pacote contra a versão anterior pega uma combinação que não some. Os SPRTs ficam
+  mais longos (3 a 7 mil partidas), por isso rodam em várias máquinas spot ao mesmo tempo.
+
