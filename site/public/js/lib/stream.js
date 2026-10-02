@@ -36,6 +36,20 @@ export function movesFromStream(events) {
       moves.push(chess.move({ from: castle.slice(0, 2), to: castle.slice(2, 4) }).san);
     }
   }
-  const last = positions[positions.length - 1];
-  return { startFen, moves, clock: { white: last.wc, black: last.bc } };
+  // O evento que fecha a partida traz a FEN mas não os relógios: vale o último que os tem.
+  const timed = positions.filter((e) => typeof e.wc === "number" && typeof e.bc === "number").pop();
+  return { startFen, moves, clock: timed ? { white: timed.wc, black: timed.bc } : null };
+}
+
+/** Exportação da partida terminada → vencedor, motivo e quanto de rating cada lado ganhou. */
+export function gameResult(data) {
+  const w = data.players?.white?.ratingDiff;
+  const b = data.players?.black?.ratingDiff;
+  const ratingDiff = typeof w === "number" || typeof b === "number" ? { white: w, black: b } : null;
+  return { winner: data.winner ?? null, status: data.status, ratingDiff };
+}
+
+export function formatDiff(diff) {
+  if (typeof diff !== "number") return "";
+  return diff > 0 ? `+${diff}` : diff < 0 ? `−${-diff}` : "±0";
 }

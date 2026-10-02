@@ -6,7 +6,8 @@ import { formatScore, winningChances, scoreToCp } from "./lib/analysis.js";
 import { buildPositions, uciLineToSan } from "./lib/game.js";
 import { nextJob, FILL_DEPTH } from "./lib/schedule.js";
 import { classifyMoves, accuracies, gameSummary, terminalEval, LABELS } from "./lib/review.js";
-import { NdjsonSplitter, movesFromStream } from "./lib/stream.js";
+import { NdjsonSplitter, movesFromStream, gameResult, formatDiff } from "./lib/stream.js";
+import { profileUrl } from "./lib/links.js";
 import { Engine } from "./engine.js";
 
 const BOT = "caiporaBot";
@@ -147,11 +148,21 @@ function playerRow(color) {
     "span",
     { class: "who" },
     el("span", { class: `piece-color ${color}`, title: label }),
-    el("b", { text: p.name }),
-    el("span", { class: "muted", text: `${p.rating ?? ""} · ${label}` }),
+    el("b", {}, playerLink(p.name, { class: "player-link" })),
+    el("span", { class: "muted", text: `${p.rating ?? ""}` }),
+    ...diffTag(color),
+    el("span", { class: "muted", text: `· ${label}` }),
   );
   const clock = el("span", { class: "clock", id: `clock-${color}`, text: clockText(color) });
   return [who, clock];
+}
+
+// Variação de rating da partida terminada (vazia enquanto a partida corre ou se for casual).
+function diffTag(color) {
+  const diff = game.result?.ratingDiff?.[color];
+  const text = formatDiff(diff);
+  if (!text) return [];
+  return [el("span", { class: `rating-diff ${diff > 0 ? "up" : diff < 0 ? "down" : ""}`, text })];
 }
 
 function renderPlayers() {
@@ -165,6 +176,7 @@ function renderPlayers() {
 function clockText(color) {
   if (!game.clock) return "";
   let s = game.clock[color];
+  if (typeof s !== "number" || !Number.isFinite(s)) return "";
   if (game.clock.running === color) s = Math.max(0, s - (Date.now() - game.clock.at) / 1000);
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -274,13 +286,19 @@ function loadGame({ id, white, black, startFen, moves, mode, clock, speed }) {
   scheduleRender();
 }
 
+// Nome que leva ao perfil no Lichess, numa aba nova para não interromper a partida ao vivo.
+function playerLink(name, attrs = {}) {
+  const url = name && name !== "Anonymous" ? profileUrl(name) : null;
+  return url ? el("a", { ...attrs, href: url, target: "_blank", rel: "noopener", text: name }) : el("span", { ...attrs, text: name ?? "" });
+}
+
 function playerOf(p) {
   return p ? { name: p.user?.name ?? p.name ?? "Anonymous", rating: p.rating ?? null, title: p.user?.title ?? null } : null;
 }
 
 async function loadHeadToHead(opponent) {
   if (!opponent) return;
-  $("h2h-title").textContent = `Head-to-head · ${BOT} vs ${opponent}`;
+  $("h2h-title").replaceChildren(`Head-to-head · ${BOT} vs `, playerLink(opponent, { class: "player-link" }));
   try {
     const r = await getJson(`/api/h2h?opponent=${encodeURIComponent(opponent)}`);
     $("h2h-wins").textContent = r.wins;
@@ -352,10 +370,15 @@ async function streamGame(id, white, black) {
   game.mode = "idle";
   if (game.clock) game.clock.running = null;
   try {
-    const data = await getJson(`${LICHESS}/game/export/${id}?moves=false`);
-    game.result = { winner: data.winner ?? null, status: data.status };
+    let data = await getJson(`${LICHESS}/game/export/${id}?moves=false`);
+    if (data.rated && !gameResult(data).ratingDiff) {
+      // A variação de rating às vezes sai alguns segundos depois do fim.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      data = await getJson(`${LICHESS}/game/export/${id}?moves=false`).catch(() => data);
+    }
+    game.result = gameResult(data);
   } catch {
-    game.result = { winner: null, status: "unknown" };
+    game.result = { winner: null, status: "unknown", ratingDiff: null };
   }
   summaryOpen = true;
   addSummaryButton();
@@ -384,7 +407,7 @@ async function review(id) {
     " · ",
     el("a", { href: "#", text: "back to live", onclick: (e) => { e.preventDefault(); location.hash = ""; } }),
   );
-  game.result = { winner: data.winner ?? null, status: data.status };
+  game.result = gameResult(data);
   game.tournament = data.arenaTour?.id ?? data.swissTour?.id ?? data.tournament ?? null;
   loadTournament(game.tournament);
   summaryOpen = false;
@@ -474,7 +497,9 @@ function renderSummary() {
   const accCell = (color) => {
     const p = game[color];
     const cls = color === game.botColor ? "acc me" : "acc";
-    return el("div", { class: cls }, `${p?.name ?? color} · ${color === "white" ? "White" : "Black"}`, el("span", { class: "big", text: f(s[color].accuracy) }), "accuracy");
+    const diff = r.ratingDiff?.[color];
+    const rating = p?.rating != null && typeof diff === "number" ? el("span", { class: "acc-rating" }, `${p.rating + diff} `, ...diffTag(color)) : null;
+    return el("div", { class: cls }, ...[`${p?.name ?? color} · ${color === "white" ? "White" : "Black"}`, el("span", { class: "big", text: f(s[color].accuracy) }), "accuracy", rating].filter(Boolean));
   };
   const mine = s[game.botColor].counts;
   const pills = ["brilliant", "great", "best", "excellent"]
@@ -578,7 +603,7 @@ function renderRanking(ranking) {
         "tr",
         { class: r.me ? "me" : "" },
         el("td", { class: "num", text: `#${r.rank}` }),
-        el("td", {}, el("a", { href: `${LICHESS}/@/${r.name}`, text: r.name })),
+        el("td", {}, playerLink(r.name)),
         el("td", { class: "num", text: String(r.rating) }),
         delta,
       ),
@@ -631,7 +656,7 @@ async function loadGames() {
           "li",
           {},
           el("span", { class: `res-${g.result}`, text: word[g.result] }),
-          el("span", {}, `vs ${g.opponent.name} (${g.opponent.rating ?? "?"}) · ${g.color}`, g.tournament ? el("span", { class: "tag-tourney", text: "Tournament" }) : null),
+          el("span", {}, "vs ", playerLink(g.opponent.name), ` (${g.opponent.rating ?? "?"}) · ${g.color}`, g.tournament ? el("span", { class: "tag-tourney", text: "Tournament" }) : null),
           el("span", { class: "muted", text: g.clock }),
           el("a", { href: `#review/${g.id}`, text: "Review" }),
         ),

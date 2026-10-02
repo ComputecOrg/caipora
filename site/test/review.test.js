@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildPositions } from "../public/js/lib/game.js";
 import { classifyMoves, accuracies, gameSummary, terminalEval, LABELS } from "../public/js/lib/review.js";
-import { NdjsonSplitter, movesFromStream } from "../public/js/lib/stream.js";
+import { NdjsonSplitter, movesFromStream, gameResult, formatDiff } from "../public/js/lib/stream.js";
 
 const deep = (cp, pv = []) => ({ depth: 20, score: { cp }, pv });
 
@@ -79,4 +79,33 @@ test("finished positions get their known evaluation, so the engine never has to 
   assert.deepEqual(terminalEval("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"), { depth: Infinity, score: { cp: 0 }, pv: [] });
   // Posição normal: nada.
   assert.equal(terminalEval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"), null);
+});
+
+test("the clocks come from the last event that has them (the closing event has none)", () => {
+  const start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  const events = [
+    { id: "x", fen: start },
+    { fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1", lm: "e2e4", wc: 178, bc: 180 },
+    { fen: "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1" },
+  ];
+  assert.deepEqual(movesFromStream(events).clock, { white: 178, black: 180 });
+});
+
+test("a stream without clocks has no clock", () => {
+  const start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+  assert.equal(movesFromStream([{ fen: start }]).clock, null);
+});
+
+test("the finished game result carries the rating change of each side", () => {
+  const data = { winner: "white", status: "mate", players: { white: { rating: 2899, ratingDiff: 4 }, black: { rating: 2989, ratingDiff: -4 } } };
+  assert.deepEqual(gameResult(data), { winner: "white", status: "mate", ratingDiff: { white: 4, black: -4 } });
+  const casual = { status: "draw", players: { white: { rating: 2899 }, black: { rating: 2989 } } };
+  assert.deepEqual(gameResult(casual), { winner: null, status: "draw", ratingDiff: null });
+});
+
+test("rating changes are written with their sign", () => {
+  assert.equal(formatDiff(4), "+4");
+  assert.equal(formatDiff(-3), "−3");
+  assert.equal(formatDiff(0), "±0");
+  assert.equal(formatDiff(undefined), "");
 });
