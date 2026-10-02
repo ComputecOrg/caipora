@@ -1,5 +1,28 @@
 # Estado do Caipora
 
+## v3.8 — 02/10/2026 (correções, tempo por nós e SPSA)
+
+- **Força estimada: ~3603 ± 25 CCRL Blitz** com 1 thread (+~31 sobre a v3.7): primeira vez acima de
+  3600. Gauntlet na AWS a 8+0.08, 300 partidas por adversário, todas com terminação normal
+  (`tools/aws-sprt/gauntlet-pack2/`): Stash 33 86,7% (=> 3598), Stash 37 74,5% (=> 3605).
+- **SPRT do pacote contra a v3.7** (STC 8+0.08, [0, 5]): **+9,5 ± 5,1** em 4248 partidas (H1).
+- **O que entrou** (cada um contra a v3.6, STC 8+0.08, [0, 5], D25):
+  - correções de peças sem peões (uma tabela por cor) e de continuação (lances de 1 e 2
+    meios-lances atrás): **+6,0 ± 3,9** em 7460 (#74);
+  - limite suave do tempo também pela fração de nós gasta no melhor lance: **+5,3 ± 3,6** em
+    8381 (#75);
+  - infraestrutura de SPSA (feature `tune`, 38 parâmetros, `scripts/spsa.py`, D26), sem mudar o
+    jogo (#73).
+- **Sem ganho nesta noite:**
+  - amortecimento pela regra dos 50 lances: +1,4 ± 3,8 depois de 7768 partidas (parado);
+  - `SCALE` 250 e 310 contra 280: os dois perto de −1 depois de ~1500–1900 partidas (fica 280);
+  - g6 com mais 30 superbatches na mesma receita (wdl 0): neutra contra a g6;
+  - SPSA de 100 iterações (6000 partidas) em 15 parâmetros: os valores quase não andaram; uma
+    sessão de 300 iterações está rodando.
+- **No bot desde 02/10/2026, 05h02** (`caipora-d7eba90`); config anterior em
+  `config.yml.bak-89360b4`.
+- **Bench:** 5263766.
+
 ## v3.7 — 02/10/2026 (noite de busca e velocidade, régua [0, 5])
 
 - **Força estimada: ~3572 ± 24 CCRL Blitz** com 1 thread (+~64 sobre a v3.6). Gauntlet na AWS a
