@@ -12,7 +12,7 @@ with an empty repository and went from ~1950 to ~3600 CCRL Blitz (estimated) in 
 code is written by [Claude Code](https://claude.com/claude-code) under the direction, review and
 testing of its author, and that is declared everywhere: see [AI_USAGE.md](AI_USAGE.md).
 
-**Play it:** [caiporaBot on Lichess](https://lichess.org/@/caiporaBot), online around the clock.
+**Watch it live:** [caipora-live.vercel.app](https://caipora-live.vercel.app), with in-browser analysis, the bot ranking and recent games. **Play it:** [caiporaBot on Lichess](https://lichess.org/@/caiporaBot), online around the clock.
 
 ---
 
@@ -160,6 +160,7 @@ Extra commands: `bench [depth]`, `go perft N`, `d` (show the board), `eval`.
 | `src/` | the engine: board, move generation, search, NNUE, UCI |
 | `trainer/` | network trainer, built on bullet |
 | `net/` | the embedded network |
+| `site/` | Caipora Live, the website (Vercel) |
 | `scripts/` | Lichess bot config, tournament sign-up, gauntlet, training helpers |
 | `deploy/` | bot server setup and the AWS spot machines used for SPRTs |
 | `docs/` | state and roadmap, decision log, NNUE and Lichess guides (Portuguese) |

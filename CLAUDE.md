@@ -89,8 +89,10 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   ranking dos bots, evolução de força e partidas recentes com revisão.
 - `cd site && npm install && npm test` (testes da lógica); `npm run build && node scripts/dev.mjs`
   serve em http://localhost:3000 com os mesmos cabeçalhos e as funções de `api/`.
-- `api/games` e `api/h2h` usam `LICHESS_TOKEN` (token sem permissões, variável de ambiente da
-  Vercel): sem token, a lista de partidas do Lichess responde 404. Nunca usar o token do bot.
+- No ar em https://caipora-live.vercel.app (projeto `caipora-live` na Vercel, Root Directory
+  `site`, deploy a cada push na main). `api/games` e `api/h2h` aceitam `LICHESS_TOKEN` (token sem
+  permissões, variável de ambiente da Vercel); em 02/10/2026 funcionaram sem ele na Vercel (de casa
+  a lista dava 404). Se voltarem a dar 404, cadastrar o token. Nunca usar o token do bot.
 - A pontuação de força do gráfico vem de `site/public/data/strength.json`: atualizar a cada versão.
 
 ## Arquitetura (não mudar sem ruling)
