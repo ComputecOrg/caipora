@@ -86,13 +86,27 @@ pub fn should_start_iteration_scaled(elapsed: Duration, limits: &Limits, scale: 
 
 /// Fator do limite suave pelo que a busca já viu: `stability` é quantas iterações seguidas o melhor
 /// lance não mudou; `score_drop`, quanto a pontuação caiu desde a iteração anterior (negativo se
-/// subiu). Lance novo ou pontuação caindo pedem mais tempo; lance firme há muito, menos.
-pub fn iteration_time_scale(stability: u32, score_drop: i32) -> f64 {
+/// subiu); `best_fraction`, a fatia dos nós gastos sob o melhor lance (ver `node_fraction_scale`).
+/// Lance novo, pontuação caindo ou busca dividida entre vários lances pedem mais tempo; lance firme
+/// há muito e que concentra a busca, menos.
+pub fn iteration_time_scale(stability: u32, score_drop: i32, best_fraction: f64) -> f64 {
     const BY_STABILITY: [f64; 6] = [1.6, 1.3, 1.1, 1.0, 0.9, 0.8];
     let base = BY_STABILITY[(stability as usize).min(BY_STABILITY.len() - 1)];
     let drop = 1.0 + f64::from(score_drop.clamp(0, 100)) / 200.0;
-    (base * drop).clamp(0.5, 2.0)
+    let by_history = (base * drop).clamp(0.5, 2.0);
+    (by_history * node_fraction_scale(best_fraction)).clamp(0.4, 2.2)
 }
+
+/// Fator pela concentração da busca: `fraction` é a fatia dos nós do thread principal gastos sob o
+/// melhor lance da raiz. Se ele leva quase tudo, as alternativas caem rápido e a decisão está
+/// clara; se a busca se espalha, há rivais à altura e vale pensar mais. O neutro fica na fatia
+/// típica, para redistribuir o tempo entre lances em vez de encurtar todos.
+pub fn node_fraction_scale(fraction: f64) -> f64 {
+    (1.0 + 0.8 * (NEUTRAL_NODE_FRACTION - fraction)).clamp(0.6, 1.4)
+}
+
+/// Fatia típica dos nós sob o melhor lance numa busca do thread principal: não mexe no tempo.
+pub const NEUTRAL_NODE_FRACTION: f64 = 0.7;
 
 #[cfg(test)]
 mod tests {
@@ -147,20 +161,44 @@ mod tests {
             2.0
         ));
         // Lance que acabou de mudar ganha tempo; estável há várias iterações, perde.
-        let changed = iteration_time_scale(0, 0);
-        let steady = iteration_time_scale(3, 0);
-        let settled = iteration_time_scale(8, 0);
+        let changed = iteration_time_scale(0, 0, NEUTRAL_NODE_FRACTION);
+        let steady = iteration_time_scale(3, 0, NEUTRAL_NODE_FRACTION);
+        let settled = iteration_time_scale(8, 0, NEUTRAL_NODE_FRACTION);
         assert!(
             changed > steady && steady > settled,
             "{changed} {steady} {settled}"
         );
         assert_eq!(steady, 1.0);
         // Pontuação caindo desde a iteração anterior pede mais tempo; subindo, nada muda.
-        assert!(iteration_time_scale(3, 50) > steady);
-        assert_eq!(iteration_time_scale(3, -50), steady);
+        assert!(iteration_time_scale(3, 50, NEUTRAL_NODE_FRACTION) > steady);
+        assert_eq!(iteration_time_scale(3, -50, NEUTRAL_NODE_FRACTION), steady);
         // Nunca passa do dobro nem cai abaixo da metade.
-        assert!(iteration_time_scale(0, 1_000) <= 2.0);
-        assert!(iteration_time_scale(100, 0) >= 0.5);
+        assert!(iteration_time_scale(0, 1_000, NEUTRAL_NODE_FRACTION) <= 2.0);
+        assert!(iteration_time_scale(100, 0, NEUTRAL_NODE_FRACTION) >= 0.5);
+    }
+
+    #[test]
+    fn a_search_concentrated_on_the_best_move_saves_time_and_a_spread_one_spends_more() {
+        // Uns 70% dos nós no melhor lance é o normal: ponto neutro.
+        assert_eq!(node_fraction_scale(NEUTRAL_NODE_FRACTION), 1.0);
+        let focused = node_fraction_scale(0.9);
+        let spread = node_fraction_scale(0.4);
+        assert!(focused < 1.0 && spread > 1.0, "{focused} {spread}");
+        assert!(node_fraction_scale(0.95) < focused);
+        // Limites próprios: nem os extremos saem de [0,6; 1,4].
+        assert!(node_fraction_scale(1.0) >= 0.6);
+        assert!(node_fraction_scale(0.0) <= 1.4);
+        // Combinado com estabilidade e queda: neutro não muda nada; concentrado reduz.
+        assert_eq!(iteration_time_scale(3, 0, NEUTRAL_NODE_FRACTION), 1.0);
+        assert!(
+            iteration_time_scale(3, 0, 0.9) < iteration_time_scale(3, 0, NEUTRAL_NODE_FRACTION)
+        );
+        assert!(
+            iteration_time_scale(3, 0, 0.4) > iteration_time_scale(3, 0, NEUTRAL_NODE_FRACTION)
+        );
+        // O fator total segue preso: nunca abaixo de 0,4 nem acima de 2,2.
+        assert!(iteration_time_scale(100, 0, 1.0) >= 0.4);
+        assert!(iteration_time_scale(0, 1_000, 0.0) <= 2.2);
     }
 
     #[test]
