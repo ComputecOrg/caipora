@@ -15,7 +15,8 @@
 #       SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]) em segundo plano, numa pasta por tag.
 #       Várias tags podem rodar juntas, repartindo os núcleos. CAIPORA_SPRT_EACH troca as opções
 #       dos dois lados (ex.: "tc=8+0.08 option.Hash=16", para relógio) e CAIPORA_SPRT_NEW_OPTS
-#       acrescenta opções só ao lado novo (ex.: "option.Threads=2"). CAIPORA_SPRT_FILES envia
+#       acrescenta opções só ao lado novo (ex.: "option.Threads=2"). CAIPORA_SPRT_BOUNDS troca os
+#       limites (ex.: "elo0=0 elo1=5"; padrão [0, 10]). CAIPORA_SPRT_FILES envia
 #       outros arquivos para ~/caipora/bin (ex.: uma rede, usada com
 #       CAIPORA_SPRT_NEW_OPTS="option.EvalFile=/home/ubuntu/caipora/bin/<rede>").
 #   deploy/aws_spot.sh sprt-status <id>
@@ -177,7 +178,7 @@ case "$cmd" in
         -each ${CAIPORA_SPRT_EACH:-tc=60+1 nodes=100000 option.Hash=16} \
         -openings file=../../8moves_v3.epd format=epd order=random -srand $seed \
         -rounds 20000 -games 2 -repeat -concurrency $conc -recover \
-        -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 \
+        -sprt ${CAIPORA_SPRT_BOUNDS:-elo0=0 elo1=10} alpha=0.05 beta=0.05 \
         -pgnout file=$tag.pgn -log file=$tag.log level=warn > $tag.out 2>&1 < /dev/null &
       echo \"SPRT $tag: $(basename "$new") contra $(basename "$base"), concorrência $conc\""
     ;;
