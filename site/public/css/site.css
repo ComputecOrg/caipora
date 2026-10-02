@@ -157,3 +157,18 @@ a:hover { color: #a9cdf0; }
   .summary { inset: 0; padding: 14px; }
   .acc .big { font-size: 22px; }
 }
+
+/* variação de rating da partida terminada */
+.rating-diff { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+.rating-diff.up { color: #8fc27f; }
+.rating-diff.down { color: #d98b7e; }
+.acc-rating { margin-top: 6px; display: flex; gap: 6px; align-items: baseline; font-family: var(--mono); font-size: 13px; color: var(--strong); }
+
+/* nome do jogador com link para o perfil: mesma cor do nome, sublinhado só ao passar o mouse */
+.player-link { color: inherit; }
+.player-link:hover { color: inherit; text-decoration: underline; }
+
+/* abertura da partida, no topo da lista de lances */
+.opening { margin: 6px 0 10px; font-size: 13px; line-height: 1.4; color: var(--dim); }
+.opening b { color: var(--strong); font-weight: 500; }
+.opening .eco { font-family: var(--mono); font-size: 12px; margin-right: 8px; padding: 1px 6px; border: 1px solid #34312c; border-radius: 4px; }
