@@ -122,6 +122,12 @@ impl Engine {
                 let result = bench::run(depth.unwrap_or(bench::DEFAULT_DEPTH));
                 self.out.line(&bench_line(&result));
             }
+            // Parâmetros da busca no formato de entrada do SPSA do OpenBench (ver `tune.rs`).
+            "tune" => {
+                for t in crate::tune::TUNABLES {
+                    self.out.line(&crate::tune::spsa_line(t));
+                }
+            }
             _ => self
                 .out
                 .line(&format!("info string unknown command: {command}")),
@@ -163,11 +169,18 @@ impl Engine {
             "option name Clear Hash type button".to_string(),
             "option name EvalFile type string default <embedded>".to_string(),
             "option name Ponder type check default false".to_string(),
-            "uciok".to_string(),
         ];
         for line in lines {
             self.out.line(&line);
         }
+        #[cfg(feature = "tune")]
+        for t in crate::tune::TUNABLES {
+            self.out.line(&format!(
+                "option name {} type spin default {} min {} max {}",
+                t.name, t.default, t.min, t.max
+            ));
+        }
+        self.out.line("uciok");
     }
 
     fn set_option(&mut self, args: &[&str]) {
@@ -204,6 +217,16 @@ impl Engine {
             "evalfile" => self.load_network(&value),
             // Só avisa que a GUI pode mandar `go ponder`; quem liga o ponder é o próprio `go`.
             "ponder" => {}
+            #[cfg(feature = "tune")]
+            _ if crate::tune::TUNABLES.iter().any(|t| t.name == name) => {
+                match value.parse::<i32>() {
+                    Ok(v) => {
+                        self.finish_search();
+                        crate::tune::set(&name, v).expect("o nome acabou de ser achado");
+                    }
+                    Err(_) => self.out.line(&format!("info string invalid {name} value")),
+                }
+            }
             _ => self
                 .out
                 .line(&format!("info string unknown option: {name}")),
@@ -832,6 +855,45 @@ mod tests {
             "{}",
             buffer.text()
         );
+    }
+
+    #[test]
+    fn tune_command_prints_the_parameters_for_openbench_spsa() {
+        let (mut engine, out) = engine();
+        send(&mut engine, &["tune"]);
+        let lines = out.lines();
+        assert_eq!(lines.len(), crate::tune::TUNABLES.len());
+        assert!(lines.contains(&"rfp_margin, int, 80, 30, 200, 8, 0.002".to_string()));
+    }
+
+    #[cfg(not(feature = "tune"))]
+    #[test]
+    fn normal_build_does_not_expose_the_tunables() {
+        let (mut engine, out) = engine();
+        send(&mut engine, &["uci", "setoption name rfp_margin value 90"]);
+        assert!(!out.text().contains("option name rfp_margin"));
+        assert!(out.text().contains("unknown option: rfp_margin"));
+        assert_eq!(crate::tune::rfp_margin(), 80);
+    }
+
+    #[cfg(feature = "tune")]
+    #[test]
+    fn tunables_are_spin_options_that_setoption_changes() {
+        let (mut engine, out) = engine();
+        send(&mut engine, &["uci"]);
+        assert!(
+            out.text()
+                .contains("option name lmr_deeper_base type spin default 40 min 0 max 120")
+        );
+        assert_eq!(out.lines().last().unwrap(), "uciok");
+        // Parâmetro que nenhum outro teste mexe: os valores são globais e os testes, paralelos.
+        send(&mut engine, &["setoption name lmr_deeper_base value 52"]);
+        assert_eq!(crate::tune::lmr_deeper_base(), 52);
+        send(&mut engine, &["setoption name lmr_deeper_base value abc"]);
+        assert!(out.text().contains("invalid lmr_deeper_base value"));
+        assert_eq!(crate::tune::lmr_deeper_base(), 52);
+        send(&mut engine, &["setoption name lmr_deeper_base value 40"]);
+        assert_eq!(crate::tune::lmr_deeper_base(), 40);
     }
 
     #[test]

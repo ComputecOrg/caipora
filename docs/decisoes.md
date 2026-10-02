@@ -380,3 +380,21 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   Elo; o SPRT do pacote contra a versão anterior pega uma combinação que não some. Os SPRTs ficam
   mais longos (3 a 7 mil partidas), por isso rodam em várias máquinas spot ao mesmo tempo.
 
+## D26 — 02/10/2026 — Infraestrutura de SPSA (feature `tune`)
+
+- **Decisão:** as margens, profundidades, fórmulas e divisores da busca saem de constantes soltas em
+  `search.rs` para uma tabela em `src/tune.rs` (`nome = padrão, mín, máx, passo`), 38 parâmetros:
+  poda (RFP, null move, futility, LMP, SEE), extensão singular, janela de aspiração, as duas
+  fórmulas do LMR (quietos e táticos) e as margens de aprofundar/encurtar depois da busca reduzida,
+  bônus e teto dos históricos, divisores do histórico de capturas e o teto da correção. No build
+  normal cada um é uma função `const`: a busca é idêntica (bench 6011459, mesma velocidade). Com
+  `--features tune` viram atômicos e opções UCI `spin` com o mesmo nome; o comando UCI `tune`
+  imprime a entrada de SPSA do OpenBench. `scripts/spsa.py` roda o SPSA localmente com o fastchess
+  (`option.<nome>=<valor>` nos dois lados). Ficam de fora o que é estrutura, não ajuste fino
+  (tamanho e granularidade da tabela de correção, valores de ordenação).
+- **Por quê:** os números atuais são chutes razoáveis nunca ajustados; SPSA é o caminho padrão para
+  ajustá-los, e sem a infraestrutura cada tentativa exige recompilar. Refeito sobre a main da v3.7
+  (a primeira versão, de antes do LMR em cut-nodes e dos históricos novos, não aplicava mais).
+- **Custo se estiver errada:** um nível de indireção a mais para ler a busca; no build `tune` o LMR
+  é calculado a cada lance (sem tabela), então ele é mais lento e nunca é o que joga. Valores
+  ajustados só entram com SPRT (régua da D25).

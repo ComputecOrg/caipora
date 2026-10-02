@@ -14,6 +14,7 @@ use crate::position::Position;
 use crate::see::{SEE_VALUE, see};
 use crate::timeman::{Limits, iteration_time_scale, should_start_iteration_scaled};
 use crate::tt::{Bound, TranspositionTable};
+use crate::tune;
 use crate::types::{Color, Piece, PieceType, Square};
 
 pub const MAX_PLY: usize = 128;
@@ -22,33 +23,13 @@ pub const MATE: i32 = 31_000;
 /// Pontuações além disso são mate em até `MAX_PLY` meios-lances.
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 
-const RFP_MAX_DEPTH: i32 = 8;
-const RFP_MARGIN: i32 = 80;
-const NMP_MIN_DEPTH: i32 = 3;
-const LMR_MIN_DEPTH: i32 = 3;
-/// Depois de uma busca reduzida que passa de alpha, a nova busca vai um nível mais fundo se a
-/// pontuação superar a melhor até aqui por `BASE + MARGIN·profundidade`, e um mais rasa se a
-/// superar por menos de `SHALLOWER`.
-const LMR_DEEPER_BASE: i32 = 40;
-const LMR_DEEPER_MARGIN: i32 = 4;
-const LMR_SHALLOWER_MARGIN: i32 = 10;
-const IIR_MIN_DEPTH: i32 = 4;
-const LMP_MAX_DEPTH: i32 = 8;
-const FUTILITY_MAX_DEPTH: i32 = 6;
-const FUTILITY_BASE: i32 = 100;
-const FUTILITY_MARGIN: i32 = 100;
-const SEE_PRUNE_MAX_DEPTH: i32 = 8;
-const SEE_QUIET_MARGIN: i32 = 50;
-const SEE_CAPTURE_MARGIN: i32 = 100;
-const SINGULAR_MIN_DEPTH: i32 = 8;
-/// A entrada da TT serve de referência se for no máximo tão mais rasa que o nó.
-const SINGULAR_TT_DEPTH_MARGIN: i32 = 3;
-/// Margem por nível abaixo da pontuação da TT que as alternativas precisam alcançar.
-const SINGULAR_MARGIN: i32 = 2;
+// Margens, profundidades e fórmulas da poda, das reduções e dos históricos: parâmetros de
+// `tune.rs` (constantes no build normal, opções UCI com a feature `tune`, para o SPSA). O que
+// cada um faz está comentado na tabela de lá.
 
 /// Quantos lances um nó de profundidade `depth` busca antes de o LMP podar os quietos restantes.
 fn lmp_threshold(depth: i32, improving: bool) -> usize {
-    let base = (3 + depth * depth) as usize;
+    let base = (tune::lmp_base() + depth * depth) as usize;
     if improving { base } else { base / 2 }
 }
 
@@ -73,9 +54,6 @@ pub struct SearchResult {
     pub pv: Vec<Move>,
 }
 
-/// Teto do histórico; a "gravidade" puxa os valores de volta para zero perto dele.
-const HISTORY_MAX: i32 = 16_384;
-
 /// Histórico de lances quietos ("butterfly"): quanto cada lance (cor, origem, destino) causou
 /// cortes, separado por a origem e o destino estarem ou não atacados pelo adversário (`threats`):
 /// fugir de um ataque e entrar numa casa atacada são lances de natureza bem diferente.
@@ -99,7 +77,7 @@ impl History {
         self.table[color.index()][Self::bucket(mv, threats)][mv.from().index()][mv.to().index()]
     }
 
-    /// Soma `bonus` (negativo para punir) com gravidade: nunca passa de `HISTORY_MAX`.
+    /// Soma `bonus` (negativo para punir) com gravidade: nunca passa de `tune::history_max()`.
     fn update(&mut self, color: Color, mv: Move, threats: Bitboard, bonus: i32) {
         apply_bonus(
             &mut self.table[color.index()][Self::bucket(mv, threats)][mv.from().index()]
@@ -114,10 +92,11 @@ impl History {
 }
 
 /// Soma `bonus` (negativo para punir) com gravidade: quanto mais perto do teto, menos o valor
-/// anda naquela direção, e nunca passa de `HISTORY_MAX`.
+/// anda naquela direção, e nunca passa de `tune::history_max()`.
 fn apply_bonus(entry: &mut i32, bonus: i32) {
-    let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
-    *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
+    let max = tune::history_max();
+    let bonus = bonus.clamp(-max, max);
+    *entry += bonus - *entry * bonus.abs() / max;
 }
 
 /// Um lance visto só pela peça que se moveu e pela casa de destino.
@@ -228,13 +207,6 @@ impl CaptureHistory {
     }
 }
 
-/// Peso do histórico de capturas na pontuação de ordem: histórico / isto, em centipeões.
-const CAPTURE_HISTORY_ORDER_DIVISOR: i32 = 32;
-/// Quanto o histórico de capturas desloca o limite de SEE de uma captura boa (histórico / isto,
-/// em centipeões): com bom histórico, uma pequena perda na troca ainda é tentada cedo; com mau
-/// histórico, uma troca igual já vai para o fim da fila.
-const CAPTURE_HISTORY_SEE_DIVISOR: i32 = 64;
-
 /// Fim de um nó com corte: a captura `best` (se o lance do corte foi captura) ganha `bonus` no
 /// histórico de capturas; as capturas tentadas antes dele, que não cortaram, perdem o mesmo.
 fn reward_captures(
@@ -286,8 +258,6 @@ impl MoveOrdering<'_> {
 const CORRECTION_SIZE: usize = 16_384;
 /// As entradas guardam centipeões multiplicados por isto, para a média móvel não perder precisão.
 const CORRECTION_GRAIN: i32 = 256;
-/// Maior correção aplicada, em centipeões.
-const CORRECTION_MAX: i32 = 100;
 
 /// Correção da avaliação estática pela estrutura de peões: média móvel da diferença entre o que a
 /// busca achou e o que a avaliação dizia, em posições com os mesmos peões. Conserta, aos poucos,
@@ -316,7 +286,7 @@ impl CorrectionHistory {
     /// pesam mais.
     fn update(&mut self, color: Color, pawn_hash: u64, error: i32, depth: i32) {
         let weight = (depth + 1).clamp(1, 16);
-        let limit = CORRECTION_MAX * CORRECTION_GRAIN;
+        let limit = tune::correction_max() * CORRECTION_GRAIN;
         let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
         let entry = &mut self.table[color.index()][Self::index(pawn_hash)];
         *entry += (target - *entry) * weight / 256;
@@ -342,13 +312,38 @@ fn correction_applies(bound: Bound, best_score: i32, static_eval: i32) -> bool {
 
 /// Bônus (e punição) de histórico por um corte a profundidade `depth`.
 fn history_bonus(depth: i32) -> i32 {
-    (16 * depth * depth).min(1_600)
+    (tune::history_bonus_mul() * depth * depth).min(tune::history_bonus_max())
 }
 
-/// Redução base do LMR de um lance quieto para a profundidade e o número do lance (1 = primeiro
-/// lance legal).
-fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
-    LMR_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
+/// Redução base do LMR, de quietos ou de táticos, para a profundidade e o número do lance (1 =
+/// primeiro lance legal). Com a feature `tune` as fórmulas mudam entre partidas: calcula na hora
+/// em vez de ler a tabela.
+fn base_reduction(depth: i32, move_number: usize, tactical: bool) -> i32 {
+    let depth = (depth.max(0) as usize).min(63);
+    let number = move_number.min(63);
+    if cfg!(feature = "tune") {
+        lmr_formula(depth, number, tactical)
+    } else if tactical {
+        LMR_TACTICAL_TABLE[depth][number]
+    } else {
+        LMR_TABLE[depth][number]
+    }
+}
+
+/// `base/100 + ln(profundidade)·ln(número do lance)/(divisor/100)`, truncado; zero na linha e na
+/// coluna 0. Quietos: 0,75 e 2,25 por padrão; táticos reduzem bem menos (−0,25 e 3,5).
+fn lmr_formula(depth: usize, number: usize, tactical: bool) -> i32 {
+    if depth == 0 || number == 0 {
+        return 0;
+    }
+    let (base, divisor) = if tactical {
+        (tune::lmr_tactical_base(), tune::lmr_tactical_divisor())
+    } else {
+        (tune::lmr_base(), tune::lmr_divisor())
+    };
+    let base = f64::from(base) / 100.0;
+    let divisor = f64::from(divisor) / 100.0;
+    (base + (depth as f64).ln() * (number as f64).ln() / divisor) as i32
 }
 
 /// O que, além da profundidade e do número do lance, muda a redução de um lance tardio.
@@ -365,11 +360,7 @@ struct LmrContext {
 
 /// Redução de um lance tardio, sem limites (quem chama prende entre 0 e a profundidade).
 fn late_move_reduction(depth: i32, move_number: usize, ctx: LmrContext) -> i32 {
-    let mut r = if ctx.tactical {
-        LMR_TACTICAL_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
-    } else {
-        lmr_reduction(depth, move_number)
-    };
+    let mut r = base_reduction(depth, move_number, ctx.tactical);
     r += i32::from(ctx.cut_node);
     r -= i32::from(ctx.improving);
     r -= i32::from(ctx.pv_node);
@@ -377,25 +368,22 @@ fn late_move_reduction(depth: i32, move_number: usize, ctx: LmrContext) -> i32 {
     r
 }
 
-/// Tabela `[profundidade][número do lance]` a partir de `formula(ln(profundidade), ln(número))`,
-/// truncada.
-fn build_lmr_table(formula: fn(f64, f64) -> f64) -> [[i32; 64]; 64] {
+/// Tabela `[profundidade][número do lance]` da `lmr_formula` com os valores padrão.
+fn build_lmr_table(tactical: bool) -> [[i32; 64]; 64] {
     let mut table = [[0; 64]; 64];
-    for (depth, row) in table.iter_mut().enumerate().skip(1) {
-        for (number, cell) in row.iter_mut().enumerate().skip(1) {
-            *cell = formula((depth as f64).ln(), (number as f64).ln()) as i32;
+    for (depth, row) in table.iter_mut().enumerate() {
+        for (number, cell) in row.iter_mut().enumerate() {
+            *cell = lmr_formula(depth, number, tactical);
         }
     }
     table
 }
 
-/// Quietos: `0.75 + ln(profundidade)·ln(número do lance)/2.25`, arredondado para baixo.
-static LMR_TABLE: LazyLock<[[i32; 64]; 64]> =
-    LazyLock::new(|| build_lmr_table(|d, n| 0.75 + d * n / 2.25));
+/// Redução base dos quietos.
+static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| build_lmr_table(false));
 
-/// Táticos: bem menos que os quietos, `ln(profundidade)·ln(número do lance)/3.5 − 0.25`.
-static LMR_TACTICAL_TABLE: LazyLock<[[i32; 64]; 64]> =
-    LazyLock::new(|| build_lmr_table(|d, n| d * n / 3.5 - 0.25));
+/// Redução base dos táticos: bem menos que a dos quietos.
+static LMR_TACTICAL_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| build_lmr_table(true));
 
 /// O que cada thread aprende por conta própria durante a busca (a TT é de todos).
 struct ThreadTables {
@@ -756,10 +744,10 @@ impl SearchState<'_> {
 
     /// Janela estreita em volta da pontuação da iteração anterior, alargada a cada falha.
     fn aspiration(&mut self, root: &Position, depth: i32, previous: i32) -> i32 {
-        if depth < 4 {
+        if depth < tune::aspiration_min_depth() {
             return self.negamax(root, depth, -INFINITY, INFINITY, 0, true, false);
         }
-        let mut delta = 25;
+        let mut delta = tune::aspiration_delta();
         let mut alpha = (previous - delta).max(-INFINITY);
         let mut beta = (previous + delta).min(INFINITY);
         loop {
@@ -775,7 +763,7 @@ impl SearchState<'_> {
                 return score;
             }
             delta *= 2;
-            if delta > 1_000 {
+            if delta > tune::aspiration_max_delta() {
                 alpha = -INFINITY;
                 beta = INFINITY;
             }
@@ -904,23 +892,25 @@ impl SearchState<'_> {
         let improving = !in_check && ply >= 2 && static_eval > self.evals[ply - 2];
 
         // Sem lance da TT a ordenação é ruim; uma busca um pouco mais rasa sai mais barata.
-        if depth >= IIR_MIN_DEPTH && ply > 0 && tt_move.is_none() {
+        if depth >= tune::iir_min_depth() && ply > 0 && tt_move.is_none() {
             depth -= 1;
         }
 
         if !pv_node && !in_check && ply > 0 && excluded.is_none() && beta.abs() < MATE_BOUND {
             // Reverse futility: tão acima de beta que nem uma perda de `margem` por nível muda nada.
-            if depth <= RFP_MAX_DEPTH && static_eval - RFP_MARGIN * depth >= beta {
+            if depth <= tune::rfp_max_depth() && static_eval - tune::rfp_margin() * depth >= beta {
                 return static_eval;
             }
             // Null move: se mesmo passando a vez a posição segura beta numa busca rasa, corta.
             // Sem peças além de peões o risco de zugzwang é alto demais.
             if !self.after_null[ply]
-                && depth >= NMP_MIN_DEPTH
+                && depth >= tune::nmp_min_depth()
                 && static_eval >= beta
                 && pos.has_non_pawn_material(us)
             {
-                let reduction = 3 + depth / 3 + ((static_eval - beta) / 200).min(3);
+                let reduction = tune::nmp_base()
+                    + depth / tune::nmp_depth_div()
+                    + ((static_eval - beta) / tune::nmp_eval_div()).min(tune::nmp_eval_max());
                 let null = pos.make_null_move();
                 self.hashes.push(null.hash());
                 self.moved[ply] = None;
@@ -989,13 +979,14 @@ impl SearchState<'_> {
                 && Some(mv) == tt_move
                 && ply > 0
                 && excluded.is_none()
-                && depth >= SINGULAR_MIN_DEPTH
+                && depth >= tune::singular_min_depth()
                 && ply < 2 * self.root_depth as usize
-                && entry.depth >= depth - SINGULAR_TT_DEPTH_MARGIN
+                && entry.depth >= depth - tune::singular_tt_depth_margin()
                 && entry.bound != Bound::Upper
                 && score_from_tt(entry.score, ply).abs() < MATE_BOUND
             {
-                let singular_beta = score_from_tt(entry.score, ply) - SINGULAR_MARGIN * depth;
+                let singular_beta =
+                    score_from_tt(entry.score, ply) - tune::singular_margin() * depth;
                 self.excluded[ply] = Some(mv);
                 let score = self.negamax(
                     pos,
@@ -1018,13 +1009,13 @@ impl SearchState<'_> {
             }
             let mut new_depth = depth - 1 + extension;
             let prunable = !pv_node && !in_check && best_score > -MATE_BOUND && !next.in_check();
-            if prunable && depth <= SEE_PRUNE_MAX_DEPTH {
+            if prunable && depth <= tune::see_prune_max_depth() {
                 // Lance que, na troca de peças na casa de destino, perde material demais para a
                 // profundidade que resta.
                 let margin = if quiet {
-                    SEE_QUIET_MARGIN
+                    tune::see_quiet_margin()
                 } else {
-                    SEE_CAPTURE_MARGIN
+                    tune::see_capture_margin()
                 };
                 if see(pos, mv) < -margin * depth {
                     continue;
@@ -1033,12 +1024,13 @@ impl SearchState<'_> {
             if prunable && quiet {
                 // Late move pruning: em nível raso, depois de muitos quietos, o resto quase nunca
                 // presta.
-                if depth <= LMP_MAX_DEPTH && legal > lmp_threshold(depth, improving) {
+                if depth <= tune::lmp_max_depth() && legal > lmp_threshold(depth, improving) {
                     continue;
                 }
                 // Futility: nem com uma boa folga a posição chega a alpha com um lance quieto.
-                if depth <= FUTILITY_MAX_DEPTH
-                    && static_eval + FUTILITY_BASE + FUTILITY_MARGIN * depth <= alpha
+                if depth <= tune::futility_max_depth()
+                    && static_eval + tune::futility_base() + tune::futility_margin() * depth
+                        <= alpha
                 {
                     continue;
                 }
@@ -1063,7 +1055,7 @@ impl SearchState<'_> {
                 // Lances tardios: primeiro uma busca reduzida; se surpreender, refaz. Capturas e
                 // xeques também reduzem, só que menos.
                 let late = legal > if pv_node { 3 } else { 2 };
-                let reduction = if depth >= LMR_MIN_DEPTH && late && !in_check {
+                let reduction = if depth >= tune::lmr_min_depth() && late && !in_check {
                     let ctx = LmrContext {
                         tactical: !quiet || next.in_check(),
                         cut_node,
@@ -1088,9 +1080,10 @@ impl SearchState<'_> {
                 if reduction > 0 && score > alpha {
                     // Passou com folga do melhor até aqui: vale um nível a mais; passou raspando:
                     // um a menos basta.
-                    if score > best_score + LMR_DEEPER_BASE + LMR_DEEPER_MARGIN * new_depth {
+                    let deeper = tune::lmr_deeper_base() + tune::lmr_deeper_margin() * new_depth;
+                    if score > best_score + deeper {
                         new_depth += 1;
-                    } else if score < best_score + LMR_SHALLOWER_MARGIN {
+                    } else if score < best_score + tune::lmr_shallower_margin() {
                         new_depth -= 1;
                     }
                     if new_depth > reduced_depth {
@@ -1339,7 +1332,7 @@ impl SearchState<'_> {
         let (Some(mv), Some(moved)) = (self.quiet_played[parent], self.moved[parent]) else {
             return;
         };
-        let bonus = (6 * depth * depth).min(600);
+        let bonus = (tune::parent_bonus_mul() * depth * depth).min(tune::parent_bonus_max());
         let previous = self.previous_moves(parent);
         let threats = self.threats[parent];
         self.update_quiet_histories(moved.piece.color, moved.piece, mv, threats, previous, bonus);
@@ -1464,9 +1457,9 @@ fn score_moves(
         } else if let Some(key) = CaptureKey::of(pos, mv) {
             let history = ordering.captures.get(key);
             let order = 10
-                * (SEE_VALUE[key.victim.index()] + history / CAPTURE_HISTORY_ORDER_DIVISOR)
+                * (SEE_VALUE[key.victim.index()] + history / tune::capture_history_order_div())
                 - ORDER_VALUE[key.piece.kind.index()];
-            if see(pos, mv) >= -history / CAPTURE_HISTORY_SEE_DIVISOR {
+            if see(pos, mv) >= -history / tune::capture_history_see_div() {
                 100_000 + order
             } else {
                 -100_000 + order
@@ -1791,12 +1784,12 @@ mod tests {
             history.update(Color::White, mv, Bitboard::EMPTY, 1_600);
         }
         let high = history.get(Color::White, mv, Bitboard::EMPTY);
-        assert!((10_001..=HISTORY_MAX).contains(&high), "{high}");
+        assert!((10_001..=tune::history_max()).contains(&high), "{high}");
         for _ in 0..1_000 {
             history.update(Color::White, mv, Bitboard::EMPTY, -1_600);
         }
         let low = history.get(Color::White, mv, Bitboard::EMPTY);
-        assert!((-HISTORY_MAX..-10_000).contains(&low), "{low}");
+        assert!((-tune::history_max()..-10_000).contains(&low), "{low}");
         assert_eq!(history.get(Color::Black, mv, Bitboard::EMPTY), 0);
     }
 
@@ -1816,14 +1809,14 @@ mod tests {
         // Erro enorme: a correção encosta no teto, sem nunca passar dele.
         for _ in 0..300 {
             correction.update(Color::White, pawns, 5_000, 20);
-            assert!(correction.get(Color::White, pawns) <= CORRECTION_MAX);
+            assert!(correction.get(Color::White, pawns) <= tune::correction_max());
         }
-        assert!(correction.get(Color::White, pawns) >= CORRECTION_MAX - 1);
+        assert!(correction.get(Color::White, pawns) >= tune::correction_max() - 1);
         for _ in 0..300 {
             correction.update(Color::White, pawns, -5_000, 20);
-            assert!(correction.get(Color::White, pawns) >= -CORRECTION_MAX);
+            assert!(correction.get(Color::White, pawns) >= -tune::correction_max());
         }
-        assert!(correction.get(Color::White, pawns) <= -CORRECTION_MAX + 1);
+        assert!(correction.get(Color::White, pawns) <= -tune::correction_max() + 1);
         // Outra cor e outra estrutura de peões não são afetadas.
         assert_eq!(correction.get(Color::Black, pawns), 0);
         assert_eq!(correction.get(Color::White, pawns ^ 1), 0);
@@ -1851,6 +1844,11 @@ mod tests {
         assert!(!correction_applies(Bound::Exact, MATE - 3, 0));
     }
 
+    /// Redução base de um lance quieto.
+    fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
+        base_reduction(depth, move_number, false)
+    }
+
     #[test]
     fn lmr_reduction_grows_with_depth_and_move_number() {
         assert_eq!(lmr_reduction(1, 1), 0);
@@ -1862,6 +1860,33 @@ mod tests {
             }
         }
         assert!(lmr_reduction(20, 40) >= 4);
+    }
+
+    /// A fórmula parametrizada (calculada na hora no build `tune`, e que monta as tabelas no
+    /// build normal) dá, com os valores padrão, exatamente as fórmulas fixas de antes.
+    #[test]
+    fn lmr_formula_with_defaults_matches_the_fixed_formulas() {
+        for depth in 0..64usize {
+            for number in 0..64usize {
+                let (d, n) = ((depth as f64).ln(), (number as f64).ln());
+                let (quiet, tactical) = if depth == 0 || number == 0 {
+                    (0, 0)
+                } else {
+                    ((0.75 + d * n / 2.25) as i32, (d * n / 3.5 - 0.25) as i32)
+                };
+                assert_eq!(lmr_formula(depth, number, false), quiet, "{depth} {number}");
+                assert_eq!(
+                    lmr_formula(depth, number, true),
+                    tactical,
+                    "{depth} {number}"
+                );
+                assert_eq!(LMR_TABLE[depth][number], quiet, "{depth} {number}");
+                assert_eq!(
+                    LMR_TACTICAL_TABLE[depth][number], tactical,
+                    "{depth} {number}"
+                );
+            }
+        }
     }
 
     /// Todas as combinações de contexto de um lance tardio.
@@ -2087,7 +2112,7 @@ mod tests {
             captures.update(safe, 1_600);
         }
         let high = captures.get(safe);
-        assert!((10_001..=HISTORY_MAX).contains(&high), "{high}");
+        assert!((10_001..=tune::history_max()).contains(&high), "{high}");
         assert_eq!(captures.get(defended), 0);
         // Mesma peça, casa e vítima, mas com a casa atacada: outra entrada.
         let threatened = CaptureKey {
