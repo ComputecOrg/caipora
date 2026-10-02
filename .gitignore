@@ -10,3 +10,5 @@
 __pycache__/
 /checkpoints/
 /trainer/target/
+# Estado do SPSA local (scripts/spsa.py)
+/spsa_state.json

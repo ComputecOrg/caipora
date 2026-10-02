@@ -12,6 +12,7 @@ pub mod search;
 pub mod see;
 pub mod timeman;
 pub mod tt;
+pub mod tune;
 pub mod types;
 pub mod uci;
 pub mod zobrist;

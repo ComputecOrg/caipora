@@ -63,6 +63,11 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   versões do Stash com rating CCRL conhecido. Do Git Bash:
   `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu -- bash /mnt/c/Projetos/ChessAI/scripts/wsl_gauntlet.sh`.
   Não rodar junto com outro teste pesado (6 núcleos): disputa de CPU gera perda por tempo falsa.
+- SPSA (D26): parâmetros da busca em `src/tune.rs`; `--features tune` os expõe como opções UCI
+  (mesmo nome) e o comando `tune` os lista no formato do OpenBench. Driver local:
+  `scripts/spsa.py` (uso em `--help`; testes em `scripts/test_spsa.py`, rodar com
+  `python -m unittest discover -s scripts -p "test_spsa.py"`). O build normal não muda (bench
+  igual); valor ajustado só entra com SPRT.
 - Ponder: o fastchess não pondera. `scripts/ponder_match.py` joga pelo python-chess, como o
   lichess-bot (D17); cada partida usa até 2 núcleos, então processos <= metade dos núcleos.
 

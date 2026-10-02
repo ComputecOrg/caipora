@@ -4,9 +4,10 @@
 //! de cada lado, num conjunto de pesos escolhido pela casa do próprio rei (king buckets, com as
 //! colunas espelhadas quando o rei está na ala do rei); a saída tem um conjunto de pesos por faixa
 //! de número de peças (output buckets). A camada oculta é mantida de forma incremental: um
-//! acumulador por perspectiva, atualizado lance a lance e recalculado do zero quando o rei daquele
-//! lado troca de bucket ou de metade do tabuleiro. A ativação é SCReLU (x limitado a [0, QA], ao
-//! quadrado). É o layout de `ChessBucketsMirrored` + `MaterialCount` do bullet.
+//! acumulador por perspectiva, atualizado lance a lance (as entradas que o lance muda numa passada
+//! só) e, quando o rei daquele lado troca de bucket ou de metade do tabuleiro, tirado de um cache
+//! por bucket que aplica só as peças que mudaram desde o último uso. A ativação é SCReLU (x
+//! limitado a [0, QA], ao quadrado). É o layout de `ChessBucketsMirrored` + `MaterialCount` do bullet.
 //!
 //! O arquivo guarda, em i16 little-endian e nesta ordem:
 //! - os pesos da camada oculta, 768·INPUT_BUCKETS × HIDDEN, agrupados por entrada;
@@ -19,9 +20,10 @@
 
 use std::sync::{Arc, LazyLock};
 
+use crate::bitboard::Bitboard;
 use crate::moves::{Move, MoveKind};
 use crate::position::{CastleSide, Position, castle_destinations};
-use crate::types::{Color, Piece, Square};
+use crate::types::{Color, Piece, PieceType, Square};
 
 /// Neurônios da camada oculta.
 pub const HIDDEN: usize = 1024;
@@ -248,34 +250,52 @@ impl Accumulators {
         }
     }
 
-    /// Os acumuladores depois do lance `mv` (pseudo-legal em `pos`), sem recalcular do zero.
-    pub fn after_move(&self, net: &Network, pos: &Position, mv: Move) -> Accumulators {
-        let (from, to) = (mv.from(), mv.to());
-        let moving = pos.piece_at(from).expect("lance de uma peça");
-        let us = moving.color;
-        // Rei que troca de bucket ou de metade do tabuleiro: o lado dele é recalculado do zero.
-        if moving.kind == crate::types::PieceType::King {
-            let king_to = if mv.kind() == MoveKind::Castle {
-                let side = if to.file() > from.file() {
-                    CastleSide::King
-                } else {
-                    CastleSide::Queen
-                };
-                castle_destinations(us, side).0
-            } else {
-                to
+    /// Escreve em `out` os acumuladores de `next`, a posição depois do lance `mv` (pseudo-legal em
+    /// `pos`), sem recalcular do zero: cada lado aplica as entradas que mudam numa passada só; o
+    /// do rei que troca de bucket ou de metade do tabuleiro sai do `cache`.
+    pub fn after_move(
+        &self,
+        out: &mut Accumulators,
+        net: &Network,
+        pos: &Position,
+        next: &Position,
+        mv: Move,
+        cache: &mut RefreshCache,
+    ) {
+        let delta = Delta::of(pos, mv);
+        for perspective in Color::ALL {
+            let king = pos.king_square(perspective);
+            let dst = out.side_mut(perspective);
+            if delta.moving.color == perspective
+                && delta.moving.kind == PieceType::King
+                && king_key(perspective, king)
+                    != king_key(perspective, next.king_square(perspective))
+            {
+                cache.refresh(net, next, perspective, dst);
+                continue;
+            }
+            let src = self.side(perspective);
+            let column = |(piece, square): (Piece, Square)| {
+                &net.feature_weights[feature(perspective, piece, square, king)]
             };
-            if king_key(us, from) != king_key(us, king_to) {
-                let mut acc = *self;
-                acc.update(net, pos, mv, us.flip());
-                *acc.side_mut(us) = side(net, &pos.make_move(mv), us);
-                return acc;
+            match (delta.added, delta.removed) {
+                ([Some(a), None], [Some(r), None]) => fused(dst, src, [column(a)], [column(r)]),
+                ([Some(a), None], [Some(r1), Some(r2)]) => {
+                    fused(dst, src, [column(a)], [column(r1), column(r2)]);
+                }
+                ([Some(a1), Some(a2)], [Some(r1), Some(r2)]) => {
+                    fused(dst, src, [column(a1), column(a2)], [column(r1), column(r2)]);
+                }
+                _ => unreachable!("todo lance tira uma ou duas peças e põe uma ou duas"),
             }
         }
-        let mut acc = *self;
-        acc.update(net, pos, mv, Color::White);
-        acc.update(net, pos, mv, Color::Black);
-        acc
+    }
+
+    fn side(&self, color: Color) -> &Accumulator {
+        match color {
+            Color::White => &self.white,
+            Color::Black => &self.black,
+        }
     }
 
     fn side_mut(&mut self, color: Color) -> &mut Accumulator {
@@ -284,24 +304,21 @@ impl Accumulators {
             Color::Black => &mut self.black,
         }
     }
+}
 
-    /// Atualiza o acumulador de `perspective` pelo lance `mv` em `pos`, com o rei desse lado onde
-    /// estava (o chamador garante que o bucket e o espelho dele não mudam).
-    fn update(&mut self, net: &Network, pos: &Position, mv: Move, perspective: Color) {
+/// Peças que um lance põe e tira do tabuleiro (uma ou duas de cada).
+struct Delta {
+    moving: Piece,
+    added: [Option<(Piece, Square)>; 2],
+    removed: [Option<(Piece, Square)>; 2],
+}
+
+impl Delta {
+    fn of(pos: &Position, mv: Move) -> Delta {
         let (from, to) = (mv.from(), mv.to());
         let moving = pos.piece_at(from).expect("lance de uma peça");
         let us = moving.color;
-        let king = pos.king_square(perspective);
-        let acc = self.side_mut(perspective);
-        let mut toggle = |piece: Piece, square: Square, add: bool| {
-            let column = &net.feature_weights[feature(perspective, piece, square, king)];
-            if add {
-                acc.add(column);
-            } else {
-                acc.sub(column);
-            }
-        };
-        match mv.kind() {
+        let (added, removed) = match mv.kind() {
             MoveKind::Castle => {
                 // O lance é "rei captura torre"; as casas finais são fixas (vale no Chess960).
                 let side = if to.file() > from.file() {
@@ -311,30 +328,114 @@ impl Accumulators {
                 };
                 let rook = pos.piece_at(to).expect("torre do roque");
                 let (king_to, rook_to) = castle_destinations(us, side);
-                toggle(moving, from, false);
-                toggle(rook, to, false);
-                toggle(moving, king_to, true);
-                toggle(rook, rook_to, true);
+                (
+                    [Some((moving, king_to)), Some((rook, rook_to))],
+                    [Some((moving, from)), Some((rook, to))],
+                )
             }
             MoveKind::EnPassant => {
                 let victim = Square::new(to.file(), from.rank()).expect("coluna e fileira em 0..8");
                 let pawn = pos.piece_at(victim).expect("peão capturado en passant");
-                toggle(pawn, victim, false);
-                toggle(moving, from, false);
-                toggle(moving, to, true);
+                (
+                    [Some((moving, to)), None],
+                    [Some((moving, from)), Some((pawn, victim))],
+                )
             }
             MoveKind::Normal | MoveKind::Promotion(_) => {
-                if let Some(captured) = pos.piece_at(to) {
-                    toggle(captured, to, false);
-                }
                 let placed = match mv.kind() {
                     MoveKind::Promotion(kind) => Piece::new(us, kind),
                     _ => moving,
                 };
-                toggle(moving, from, false);
-                toggle(placed, to, true);
+                let captured = pos.piece_at(to).map(|piece| (piece, to));
+                ([Some((placed, to)), None], [Some((moving, from)), captured])
+            }
+        };
+        Delta {
+            moving,
+            added,
+            removed,
+        }
+    }
+}
+
+/// `dst = src + Σ adds − Σ subs`, numa passada só pelos neurônios. A soma é em i16, como nas
+/// atualizações uma a uma; a ordem das parcelas não muda o resultado.
+fn fused<const A: usize, const S: usize>(
+    dst: &mut Accumulator,
+    src: &Accumulator,
+    adds: [&Accumulator; A],
+    subs: [&Accumulator; S],
+) {
+    for i in 0..HIDDEN {
+        let mut value = src.values[i];
+        for add in &adds {
+            value += add.values[i];
+        }
+        for sub in &subs {
+            value -= sub.values[i];
+        }
+        dst.values[i] = value;
+    }
+}
+
+/// Cache de recálculo (a "finny table"): por perspectiva, bucket do rei e metade do tabuleiro, um
+/// acumulador e as peças com que ele foi calculado. Quando o rei troca de bucket ou de metade, o
+/// acumulador novo sai da entrada correspondente aplicando só as peças que mudaram desde a última
+/// vez, em vez de somar todas do zero.
+pub struct RefreshCache {
+    entries: Vec<CacheEntry>,
+}
+
+#[derive(Clone)]
+struct CacheEntry {
+    acc: Accumulator,
+    /// Peças de cada cor e tipo quando `acc` foi calculado.
+    pieces: [[u64; 6]; 2],
+}
+
+impl RefreshCache {
+    /// Entradas vazias: só o viés, sem peças.
+    pub fn new(net: &Network) -> RefreshCache {
+        let empty = CacheEntry {
+            acc: net.feature_bias,
+            pieces: [[0; 6]; 2],
+        };
+        RefreshCache {
+            entries: vec![empty; 2 * INPUT_BUCKETS * 2],
+        }
+    }
+
+    /// Escreve em `out` o acumulador de `perspective` em `pos`, atualizando a entrada do rei.
+    pub fn refresh(
+        &mut self,
+        net: &Network,
+        pos: &Position,
+        perspective: Color,
+        out: &mut Accumulator,
+    ) {
+        let king = pos.king_square(perspective);
+        let (bucket, flip) = king_key(perspective, king);
+        let index = (perspective.index() * INPUT_BUCKETS + bucket) * 2 + usize::from(flip != 0);
+        let entry = &mut self.entries[index];
+        for color in Color::ALL {
+            for kind in PieceType::ALL {
+                let now = pos.pieces(color, kind).0;
+                let before = &mut entry.pieces[color.index()][kind.index()];
+                let piece = Piece::new(color, kind);
+                for square in Bitboard(now & !*before).squares() {
+                    entry
+                        .acc
+                        .add(&net.feature_weights[feature(perspective, piece, square, king)]);
+                }
+                for square in Bitboard(*before & !now).squares() {
+                    entry
+                        .acc
+                        .sub(&net.feature_weights[feature(perspective, piece, square, king)]);
+                }
+                *before = now;
             }
         }
+        *out = entry.acc;
     }
 }
 
@@ -376,7 +477,6 @@ mod tests {
     use super::*;
     use crate::movegen::generate_legal;
     use crate::position::STARTPOS_FEN;
-    use crate::types::PieceType;
 
     fn sq(name: &str) -> Square {
         name.parse().unwrap()
@@ -545,12 +645,16 @@ mod tests {
     #[test]
     fn incremental_updates_match_a_full_refresh() {
         let net = random_network(11);
+        // Roque (inclusive Chess960), en passant, promoções e finais em que os reis passeiam,
+        // trocando de bucket e de metade do tabuleiro (o recálculo passa pelo cache).
         let starts = [
             STARTPOS_FEN,
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
             "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
             "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3",
             "1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1",
+            "8/2p2k2/1p6/3P4/2P5/8/4K3/7R w - - 0 40",
+            "4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
         ];
         let mut state = 0x9E37_79B9_7F4A_7C15_u64;
         let mut next = || {
@@ -559,6 +663,10 @@ mod tests {
             state ^= state << 17;
             state
         };
+        // Um cache só para todas as partidas: as entradas ficam de posições que já não têm nada a
+        // ver com a atual, e o recálculo precisa acertar a diferença assim mesmo.
+        let mut cache = RefreshCache::new(&net);
+        let mut refreshes = 0;
         for fen in starts {
             for _game in 0..10 {
                 let mut pos = Position::from_fen(fen).unwrap();
@@ -569,14 +677,49 @@ mod tests {
                         break;
                     }
                     let mv = moves.as_slice()[(next() % moves.len() as u64) as usize];
-                    acc = acc.after_move(&net, &pos, mv);
-                    pos = pos.make_move(mv);
+                    let after = pos.make_move(mv);
+                    let us = pos.side_to_move();
+                    if king_key(us, pos.king_square(us)) != king_key(us, after.king_square(us)) {
+                        refreshes += 1;
+                    }
+                    let mut out = Accumulators::new(&net, &Position::startpos());
+                    acc.after_move(&mut out, &net, &pos, &after, mv, &mut cache);
+                    acc = out;
+                    pos = after;
                     assert!(
                         acc == Accumulators::new(&net, &pos),
                         "{} após {mv:?}",
                         pos.to_fen()
                     );
                 }
+            }
+        }
+        assert!(refreshes > 100, "{refreshes}");
+    }
+
+    #[test]
+    fn the_refresh_cache_matches_a_full_refresh() {
+        let net = random_network(5);
+        let mut cache = RefreshCache::new(&net);
+        // Mesmo rei, peças diferentes; depois outro bucket e a outra metade do tabuleiro; e a
+        // volta à primeira entrada, que guardou o estado da primeira posição.
+        let fens = [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "r3k2r/p1pp1pb1/bn2pn2/3PN3/1p2P3/2N2Q1p/PPPB1PPP/R3K2R w KQkq - 0 1",
+            "4k3/8/8/8/8/8/8/4K3 w - - 0 1",
+            "8/8/3k4/8/8/2K5/8/8 w - - 0 1",
+            "r1bqkbnr/pppppppp/2n5/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 2 2",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        ];
+        for fen in fens {
+            let pos = Position::from_fen(fen).unwrap();
+            for perspective in Color::ALL {
+                let mut acc = side(&net, &Position::startpos(), perspective);
+                cache.refresh(&net, &pos, perspective, &mut acc);
+                assert!(
+                    acc == side(&net, &pos, perspective),
+                    "{fen} {perspective:?}"
+                );
             }
         }
     }
