@@ -28,6 +28,8 @@ export function summarizeGames(ndjson, me) {
       rated: !!g.rated,
       status: g.status,
       at: g.createdAt,
+      // A API manda `arenaTour`/`swissTour` ({id, name}); `tournament` é o nome antigo.
+      tournament: g.arenaTour?.id ?? g.swissTour?.id ?? g.tournament ?? null,
     });
   }
   return games;

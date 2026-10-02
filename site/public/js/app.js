@@ -5,7 +5,7 @@ import { Chessground } from "../vendor/chessground/chessground.js";
 import { formatScore, winningChances, scoreToCp } from "./lib/analysis.js";
 import { buildPositions, uciLineToSan } from "./lib/game.js";
 import { nextJob, FILL_DEPTH } from "./lib/schedule.js";
-import { classifyMoves, accuracies, LABELS } from "./lib/review.js";
+import { classifyMoves, accuracies, gameSummary, terminalEval, LABELS } from "./lib/review.js";
 import { NdjsonSplitter, movesFromStream } from "./lib/stream.js";
 import { Engine } from "./engine.js";
 
@@ -26,9 +26,12 @@ const game = {
   evals: [],
   seconds: [],
   clock: null, // {white, black, at, running: "white"|"black"|null}
-  result: null,
+  result: null, // {winner: "white"|"black"|null, status} quando a partida acabou
   speed: "",
+  tournament: null, // id do torneio da partida, se for de torneio
 };
+// Cartão de resumo do fim da partida: aberto sozinho quando a partida ao vivo acaba; "Close" fecha.
+let summaryOpen = false;
 let selected = null; // null = acompanha a última posição
 let streamAbort = null;
 // Partida em revisão (id) ou null: marcada antes de qualquer espera, para o ao vivo não sobrepor.
@@ -87,8 +90,14 @@ function schedule() {
   engine.analyze(game.positions[job.index].fen, job.depth, { index: job.index, key: game.key });
 }
 
-/** Nova posição: interrompe a análise se ela não for da última posição. */
+/** Nova posição: marca as posições terminadas e interrompe a análise se ela não for da última. */
 function positionsChanged() {
+  game.positions.forEach((pos, i) => {
+    if (!game.evals[i]) {
+      const known = terminalEval(pos.fen);
+      if (known) game.evals[i] = known;
+    }
+  });
   if (engine.job && (engine.job.key !== game.key || engine.job.index !== game.positions.length - 1)) {
     engine.stop();
   } else {
@@ -127,6 +136,7 @@ function render() {
   const verdicts = classifyMoves(game.positions, game.evals, game.seconds, JUDGE_DEPTH);
   renderMoves(index, verdicts);
   renderAnalysis(index, verdicts);
+  renderSummary();
 }
 
 function playerRow(color) {
@@ -181,18 +191,34 @@ function renderAnalysis(index, verdicts) {
   const second = game.seconds[index];
   const fen = game.positions[index].fen;
   if (ev) {
-    $("eval").textContent = formatScore(ev.score);
+    // Posição terminada (mate ou empate) tem avaliação conhecida, não um número de motor.
+    $("eval").textContent = ev.depth === Infinity ? (ev.score.cp === 0 ? "Draw" : "Checkmate") : formatScore(ev.score);
     setEvalBar(ev.score);
     const line = (info, cls) =>
       el("div", { class: cls }, el("b", { text: `${formatScore(info.score)}  ` }), uciLineToSan(fen, info.pv, 8).join(" "));
-    const lines = [line(ev, "first")];
-    // A 2ª linha só vale ao lado da 1ª se for da mesma profundidade (senão compara buscas diferentes).
-    if (second && second.depth === ev.depth) lines.push(line(second, "second"));
-    lines.push(el("div", { class: "muted small", text: `depth ${ev.depth}` }));
-    $("lines").replaceChildren(...lines);
+    if (ev.depth === Infinity) {
+      $("lines").replaceChildren(el("div", { class: "muted", text: "The game is over." }));
+    } else {
+      const lines = [line(ev, "first")];
+      // A 2ª linha só vale ao lado da 1ª se for da mesma profundidade (senão compara buscas diferentes).
+      if (second && second.depth === ev.depth) lines.push(line(second, "second"));
+      lines.push(el("div", { class: "muted small", text: `depth ${ev.depth}` }));
+      $("lines").replaceChildren(...lines);
+    }
   } else if (engine.ready) {
     $("eval").textContent = "…";
   }
+  renderVerdict(index, verdicts);
+  const acc = accuracies(game.positions, game.evals, JUDGE_DEPTH);
+  if (acc.white != null || acc.black != null) {
+    const f = (x) => (x == null ? "–" : x.toFixed(1));
+    $("accuracy").textContent = `Accuracy ${game.white?.name ?? "White"} ${f(acc.white)} · ${game.black?.name ?? "Black"} ${f(acc.black)}`;
+  } else {
+    $("accuracy").textContent = "";
+  }
+}
+
+function renderVerdict(index, verdicts) {
   const v = verdicts[index];
   const pos = game.positions[index];
   if (v && pos.san) {
@@ -201,13 +227,6 @@ function renderAnalysis(index, verdicts) {
     $("verdict").replaceChildren(el("span", { class: "badge", style: `background:${info.color}`, text: info.label }), el("span", { text }));
   } else {
     $("verdict").replaceChildren();
-  }
-  const acc = accuracies(game.positions, game.evals, JUDGE_DEPTH);
-  if (acc.white != null || acc.black != null) {
-    const f = (x) => (x == null ? "–" : x.toFixed(1));
-    $("accuracy").textContent = `Accuracy ${game.white?.name ?? "White"} ${f(acc.white)} · ${game.black?.name ?? "Black"} ${f(acc.black)}`;
-  } else {
-    $("accuracy").textContent = "";
   }
 }
 
@@ -285,12 +304,16 @@ async function watchLive() {
     return;
   }
   if (reviewing || current.status !== "started" || game.mode === "live") return;
+  summaryOpen = false;
+  game.result = null;
+  game.tournament = current.arenaTour?.id ?? current.swissTour?.id ?? current.tournament ?? null;
+  loadTournament(game.tournament);
   const white = playerOf(current.players.white);
   const black = playerOf(current.players.black);
   const opponent = white?.name?.toLowerCase() === BOT.toLowerCase() ? black?.name : white?.name;
   loadHeadToHead(opponent);
   const c = current.clock;
-  $("game-line").textContent = `${current.rated ? "Rated" : "Casual"} ${current.speed}${c ? ` ${c.initial / 60}+${c.increment}` : ""} · `;
+  $("game-line").textContent = `${game.tournament ? "Tournament game · " : ""}${current.rated ? "Rated" : "Casual"} ${current.speed}${c ? ` ${c.initial / 60}+${c.increment}` : ""} · `;
   $("game-line").append(el("a", { href: `${LICHESS}/${current.id}`, text: "open on Lichess" }));
   await streamGame(current.id, white, black);
 }
@@ -325,9 +348,17 @@ async function streamGame(id, white, black) {
     if (controller.signal.aborted) return;
   }
   if (streamAbort !== controller) return;
-  // Fim da partida: o relógio para e a lista de partidas e o histórico se atualizam.
+  // Fim da partida: o relógio para, o resumo abre e a lista de partidas e o histórico se atualizam.
   game.mode = "idle";
   if (game.clock) game.clock.running = null;
+  try {
+    const data = await getJson(`${LICHESS}/game/export/${id}?moves=false`);
+    game.result = { winner: data.winner ?? null, status: data.status };
+  } catch {
+    game.result = { winner: null, status: "unknown" };
+  }
+  summaryOpen = true;
+  addSummaryButton();
   scheduleRender();
   setStatus();
   loadGames();
@@ -353,8 +384,144 @@ async function review(id) {
     " · ",
     el("a", { href: "#", text: "back to live", onclick: (e) => { e.preventDefault(); location.hash = ""; } }),
   );
+  game.result = { winner: data.winner ?? null, status: data.status };
+  game.tournament = data.arenaTour?.id ?? data.swissTour?.id ?? data.tournament ?? null;
+  loadTournament(game.tournament);
+  summaryOpen = false;
   loadGame({ id, white, black, startFen: data.initialFen, moves: data.moves ? data.moves.split(" ") : [], mode: "review", clock: null });
   selected = null;
+  addSummaryButton();
+}
+
+// ---------- campeonato ----------
+let tourneyTimer = null;
+async function loadTournament(id) {
+  clearInterval(tourneyTimer);
+  if (!id) {
+    $("tourney").hidden = true;
+    return;
+  }
+  const refresh = async () => {
+    try {
+      const t = await getJson(`${LICHESS}/api/tournament/${id}`);
+      // A classificação é opcional: o Lichess limita exportações simultâneas por IP, e sem ela a
+      // faixa continua com o nome e o tempo do torneio.
+      // A primeira página da classificação já vem no resumo do torneio; a exportação completa só
+      // é pedida se o bot não estiver nela.
+      let rows = (t.standing?.players ?? []).map((p) => ({ username: p.name, rank: p.rank, score: p.score }));
+      if (!rows.some((r) => r.username?.toLowerCase() === BOT.toLowerCase())) try {
+        const response = await fetch(`${LICHESS}/api/tournament/${id}/results?nb=500`, { headers: { Accept: "application/x-ndjson" } });
+        if (response.ok) {
+          rows = (await response.text()).split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l)).filter((r) => r.username);
+        }
+      } catch {
+        rows = [];
+      }
+      const me = rows.find((r) => r.username.toLowerCase() === BOT.toLowerCase());
+      const kind = t.system === "swiss" ? "Swiss" : t.teamBattle ? "Team battle" : "Arena";
+      $("tourney-kind").textContent = `Tournament · ${kind}`;
+      $("tourney-name").textContent = t.fullName ?? "Tournament";
+      const secs = t.secondsToFinish;
+      const h = Math.floor((secs || 0) / 3600);
+      const m = Math.floor(((secs || 0) % 3600) / 60);
+      const left = t.isFinished ? "finished" : secs ? `ends in ${h ? `${h}h ${String(m).padStart(2, "0")} min` : `${m} min`}` : "";
+      const players = t.nbPlayers ?? rows.length;
+      const standing = me ? `${BOT}: #${me.rank} of ${players} · ${me.score} pts` : `${players} players`;
+      $("tourney-standing").textContent = [standing, left].filter(Boolean).join(" · ");
+      $("tourney-link").href = `${LICHESS}/tournament/${id}`;
+      $("tourney").hidden = false;
+    } catch {
+      $("tourney").hidden = true;
+    }
+  };
+  await refresh();
+  tourneyTimer = setInterval(refresh, 60000);
+}
+
+// ---------- resumo do fim da partida ----------
+const STATUS_TEXT = {
+  mate: "by checkmate",
+  resign: "by resignation",
+  outoftime: "on time",
+  timeout: "on time",
+  stalemate: "by stalemate",
+  draw: "by agreement or rule",
+  insufficientMaterialClaim: "by insufficient material",
+};
+const PHASE_EN = { opening: "Opening", middlegame: "Middlegame", endgame: "Endgame" };
+
+function addSummaryButton() {
+  if (document.getElementById("open-summary")) return;
+  const button = el("button", { class: "btn", id: "open-summary", type: "button", text: "Summary" });
+  button.addEventListener("click", () => {
+    summaryOpen = true;
+    render();
+  });
+  $("game-line").append(" · ", button);
+}
+
+function renderSummary() {
+  const box = $("summary");
+  if (!summaryOpen || !game.result) {
+    box.hidden = true;
+    return;
+  }
+  const s = gameSummary(game.positions, game.evals, game.seconds, JUDGE_DEPTH);
+  const r = game.result;
+  const title = !r.winner ? "Draw" : r.winner === game.botColor ? `${BOT} won` : `${BOT} lost`;
+  const score = !r.winner ? "½–½" : r.winner === "white" ? "1–0" : "0–1";
+  const f = (x) => (x == null ? "–" : x.toFixed(1));
+  const accCell = (color) => {
+    const p = game[color];
+    const cls = color === game.botColor ? "acc me" : "acc";
+    return el("div", { class: cls }, `${p?.name ?? color} · ${color === "white" ? "White" : "Black"}`, el("span", { class: "big", text: f(s[color].accuracy) }), "accuracy");
+  };
+  const mine = s[game.botColor].counts;
+  const pills = ["brilliant", "great", "best", "excellent"]
+    .filter((k) => mine[k])
+    .slice(0, 3)
+    .map((k) => {
+      const pill = el("span", { class: "pill", text: `${mine[k]} ${LABELS[k].label}` });
+      pill.style.boxShadow = `inset 3px 0 0 ${LABELS[k].color}`;
+      return pill;
+    });
+  const phases = el("div", { class: "phase-table" }, el("span", { class: "h" }), el("span", { class: "h", text: game.white?.name ?? "White" }), el("span", { class: "h", text: game.black?.name ?? "Black" }));
+  for (const ph of ["opening", "middlegame", "endgame"]) {
+    if (s.white.phases[ph] == null && s.black.phases[ph] == null) continue;
+    phases.append(el("span", { text: PHASE_EN[ph] }), el("span", { class: "n", text: f(s.white.phases[ph]) }), el("span", { class: "n", text: f(s.black.phases[ph]) }));
+  }
+  const n = (side, ...keys) => keys.reduce((a, k) => a + (side.counts[k] || 0), 0);
+  const errors = el(
+    "div",
+    { class: "errors" },
+    el("span", { text: `Inaccuracies ${n(s.white, "inaccuracy")} / ${n(s.black, "inaccuracy")}` }),
+    el("span", { text: `Mistakes ${n(s.white, "mistake", "miss")} / ${n(s.black, "mistake", "miss")}` }),
+    el("span", { text: `Blunders ${n(s.white, "blunder")} / ${n(s.black, "blunder")}` }),
+  );
+  const close = el("button", { class: "btn", type: "button", "aria-label": "Close summary", text: "Close" });
+  close.addEventListener("click", () => {
+    summaryOpen = false;
+    render();
+  });
+  const footer = s.analysed < s.total
+    ? `Analysing: ${s.analysed} of ${s.total} moves done…`
+    : game.mode === "review" ? "Use the moves list to step through the game." : "The next game appears here automatically.";
+  // replaceChildren escreveria "null" como texto: os opcionais saem antes.
+  const parts = [
+    el(
+      "div",
+      { class: "summary-head" },
+      el("div", {}, el("h2", { class: "summary-title", id: "summary-title", text: title }), el("span", { class: "summary-sub", text: `${STATUS_TEXT[r.status] ?? r.status} · ${score}${game.tournament ? " · tournament game" : ""}` })),
+      close,
+    ),
+    el("div", { class: "acc-grid" }, accCell("white"), accCell("black")),
+    pills.length ? el("div", { class: "pills" }, ...pills) : null,
+    phases,
+    errors,
+    el("div", { class: "muted small", text: footer }),
+  ].filter(Boolean);
+  box.replaceChildren(...parts);
+  box.hidden = false;
 }
 
 // ---------- topo, ranking, evolução, partidas ----------
@@ -363,7 +530,9 @@ async function setStatus() {
     const [s] = await getJson(`${LICHESS}/api/users/status?ids=${BOT}`);
     const status = $("status");
     status.classList.toggle("online", !!s.online);
-    $("status-text").textContent = s.playing ? "playing now" : s.online ? "online · waiting for a game" : "offline";
+    $("status-text").textContent = s.playing
+      ? game.tournament && game.mode === "live" ? "playing in a tournament" : "playing now"
+      : s.online ? "online · waiting for a game" : "offline";
   } catch {
     // mantém o texto anterior
   }
@@ -462,7 +631,7 @@ async function loadGames() {
           "li",
           {},
           el("span", { class: `res-${g.result}`, text: word[g.result] }),
-          el("span", { text: `vs ${g.opponent.name} (${g.opponent.rating ?? "?"}) · ${g.color}` }),
+          el("span", {}, `vs ${g.opponent.name} (${g.opponent.rating ?? "?"}) · ${g.color}`, g.tournament ? el("span", { class: "tag-tourney", text: "Tournament" }) : null),
           el("span", { class: "muted", text: g.clock }),
           el("a", { href: `#review/${g.id}`, text: "Review" }),
         ),
