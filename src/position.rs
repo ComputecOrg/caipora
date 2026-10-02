@@ -512,6 +512,30 @@ impl Position {
         !(self.attackers_to(square, self.occupied()) & self.colors[by.index()]).is_empty()
     }
 
+    /// Todas as casas atacadas por peças da cor `by` (deslizantes bloqueados pela ocupação atual).
+    pub fn attacked_by(&self, by: Color) -> Bitboard {
+        const NOT_FILE_A: u64 = !0x0101_0101_0101_0101;
+        const NOT_FILE_H: u64 = !0x8080_8080_8080_8080;
+        let occupied = self.occupied();
+        let pawns = self.pieces(by, PieceType::Pawn).0;
+        let mut attacked = Bitboard(match by {
+            Color::White => ((pawns & NOT_FILE_A) << 7) | ((pawns & NOT_FILE_H) << 9),
+            Color::Black => ((pawns & NOT_FILE_A) >> 9) | ((pawns & NOT_FILE_H) >> 7),
+        });
+        for square in self.pieces(by, PieceType::Knight).squares() {
+            attacked |= attacks::knight(square);
+        }
+        let diagonal = self.pieces(by, PieceType::Bishop) | self.pieces(by, PieceType::Queen);
+        for square in diagonal.squares() {
+            attacked |= attacks::bishop(square, occupied);
+        }
+        let straight = self.pieces(by, PieceType::Rook) | self.pieces(by, PieceType::Queen);
+        for square in straight.squares() {
+            attacked |= attacks::rook(square, occupied);
+        }
+        attacked | attacks::king(self.king_square(by))
+    }
+
     pub fn in_check(&self) -> bool {
         self.is_attacked(
             self.king_square(self.side_to_move),
@@ -1079,6 +1103,28 @@ mod tests {
                 discriminant(&expected),
                 "{fen}: erro inesperado {err:?}"
             );
+        }
+    }
+    #[test]
+    fn attacked_by_marks_every_square_a_side_attacks() {
+        // Brancas: peão em e4, cavalo em b1, torre em a3 barrada pelo peão de c3, rei em h1.
+        let pos = Position::from_fen("4k3/8/8/8/4P3/R1P5/8/1N5K w - - 0 1").unwrap();
+        let attacked = pos.attacked_by(Color::White);
+        for square in [
+            "d5", "f5", "a3", "c3", "d2", "b4", "a8", "a1", "g1", "g2", "h2", "b3",
+        ] {
+            assert!(attacked.contains(sq(square)), "{square}");
+        }
+        for square in ["e5", "d3", "e4", "h1", "e8", "c2"] {
+            assert!(!attacked.contains(sq(square)), "{square}");
+        }
+        // As casas atacadas uma a uma batem com `is_attacked`.
+        for color in [Color::White, Color::Black] {
+            let attacked = pos.attacked_by(color);
+            for index in 0..64u8 {
+                let square = Square::from_index(index).unwrap();
+                assert_eq!(attacked.contains(square), pos.is_attacked(square, color));
+            }
         }
     }
 }

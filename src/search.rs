@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use crate::bitboard::Bitboard;
 use crate::eval::evaluate;
 use crate::movegen::{generate_legal, generate_pseudo_legal};
 use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
-use crate::nnue::{Accumulators, Network};
+use crate::nnue::{Accumulators, Network, RefreshCache};
 use crate::position::Position;
 use crate::see::{SEE_VALUE, see};
 use crate::timeman::{Limits, iteration_time_scale, should_start_iteration_scaled};
@@ -25,6 +26,12 @@ const RFP_MAX_DEPTH: i32 = 8;
 const RFP_MARGIN: i32 = 80;
 const NMP_MIN_DEPTH: i32 = 3;
 const LMR_MIN_DEPTH: i32 = 3;
+/// Depois de uma busca reduzida que passa de alpha, a nova busca vai um nível mais fundo se a
+/// pontuação superar a melhor até aqui por `BASE + MARGIN·profundidade`, e um mais rasa se a
+/// superar por menos de `SHALLOWER`.
+const LMR_DEEPER_BASE: i32 = 40;
+const LMR_DEEPER_MARGIN: i32 = 4;
+const LMR_SHALLOWER_MARGIN: i32 = 10;
 const IIR_MIN_DEPTH: i32 = 4;
 const LMP_MAX_DEPTH: i32 = 8;
 const FUTILITY_MAX_DEPTH: i32 = 6;
@@ -70,32 +77,39 @@ pub struct SearchResult {
 const HISTORY_MAX: i32 = 16_384;
 
 /// Histórico de lances quietos ("butterfly"): quanto cada lance (cor, origem, destino) causou
-/// cortes. Guia a ordenação e as reduções.
+/// cortes, separado por a origem e o destino estarem ou não atacados pelo adversário (`threats`):
+/// fugir de um ataque e entrar numa casa atacada são lances de natureza bem diferente.
 struct History {
-    table: [[[i32; 64]; 64]; 2],
+    table: [[[[i32; 64]; 64]; 4]; 2],
 }
 
 impl History {
     fn new() -> Box<History> {
         Box::new(History {
-            table: [[[0; 64]; 64]; 2],
+            table: [[[[0; 64]; 64]; 4]; 2],
         })
     }
 
-    fn get(&self, color: Color, mv: Move) -> i32 {
-        self.table[color.index()][mv.from().index()][mv.to().index()]
+    /// Balde de ameaça do lance: bit 1 se a origem está atacada, bit 0 se o destino está.
+    fn bucket(mv: Move, threats: Bitboard) -> usize {
+        2 * usize::from(threats.contains(mv.from())) + usize::from(threats.contains(mv.to()))
+    }
+
+    fn get(&self, color: Color, mv: Move, threats: Bitboard) -> i32 {
+        self.table[color.index()][Self::bucket(mv, threats)][mv.from().index()][mv.to().index()]
     }
 
     /// Soma `bonus` (negativo para punir) com gravidade: nunca passa de `HISTORY_MAX`.
-    fn update(&mut self, color: Color, mv: Move, bonus: i32) {
+    fn update(&mut self, color: Color, mv: Move, threats: Bitboard, bonus: i32) {
         apply_bonus(
-            &mut self.table[color.index()][mv.from().index()][mv.to().index()],
+            &mut self.table[color.index()][Self::bucket(mv, threats)][mv.from().index()]
+                [mv.to().index()],
             bonus,
         );
     }
 
     fn clear(&mut self) {
-        self.table = [[[0; 64]; 64]; 2];
+        self.table = [[[[0; 64]; 64]; 4]; 2];
     }
 }
 
@@ -238,22 +252,30 @@ fn reward_captures(
     }
 }
 
-/// O que ordena os lances de um nó além da TT e dos killers: o histórico simples e as
-/// continuações dos dois lances anteriores (o do adversário e o nosso) para os quietos, e o
-/// histórico de capturas para as capturas.
+/// O que ordena os lances de um nó além da TT e dos killers. Quietos: o histórico simples (no
+/// balde de ameaça do lance) e as continuações dos lances anteriores: o do adversário e o nosso
+/// (`previous[0]` e `previous[1]`, numa tabela) e o nosso de quatro meios-lances atrás
+/// (`previous[2]`, noutra). Capturas: o histórico de capturas.
 struct MoveOrdering<'a> {
     history: &'a History,
     continuation: &'a ContinuationHistory,
+    continuation4: &'a ContinuationHistory,
     captures: &'a CaptureHistory,
-    previous: [Option<PieceTo>; 2],
+    /// Casas atacadas pelo adversário na posição do nó.
+    threats: Bitboard,
+    previous: [Option<PieceTo>; 3],
 }
 
 impl MoveOrdering<'_> {
     fn quiet_score(&self, pos: &Position, mv: Move) -> i32 {
-        let mut score = self.history.get(pos.side_to_move(), mv);
+        let mut score = self.history.get(pos.side_to_move(), mv, self.threats);
         if let Some(piece) = pos.piece_at(mv.from()) {
-            for previous in self.previous.into_iter().flatten() {
-                score += self.continuation.get(previous, piece, mv.to());
+            for previous in self.previous[..2].iter().flatten() {
+                score += self.continuation.get(*previous, piece, mv.to());
+            }
+            if let Some(previous) = self.previous[2] {
+                // Lance mais distante, sinal mais fraco: entra pela metade.
+                score += self.continuation4.get(previous, piece, mv.to()) / 2;
             }
         }
         score
@@ -323,27 +345,64 @@ fn history_bonus(depth: i32) -> i32 {
     (16 * depth * depth).min(1_600)
 }
 
-/// Redução base do LMR para a profundidade e o número do lance (1 = primeiro lance legal).
+/// Redução base do LMR de um lance quieto para a profundidade e o número do lance (1 = primeiro
+/// lance legal).
 fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
     LMR_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
 }
 
-/// `0.75 + ln(profundidade)·ln(número do lance)/2.25`, arredondado para baixo.
-static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
+/// O que, além da profundidade e do número do lance, muda a redução de um lance tardio.
+#[derive(Clone, Copy, Debug)]
+struct LmrContext {
+    /// Captura, promoção ou lance que dá xeque: reduz menos que um quieto.
+    tactical: bool,
+    /// Nó em que se espera um corte: se o primeiro lance não cortou, os tardios valem pouco.
+    cut_node: bool,
+    improving: bool,
+    pv_node: bool,
+    killer: bool,
+}
+
+/// Redução de um lance tardio, sem limites (quem chama prende entre 0 e a profundidade).
+fn late_move_reduction(depth: i32, move_number: usize, ctx: LmrContext) -> i32 {
+    let mut r = if ctx.tactical {
+        LMR_TACTICAL_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
+    } else {
+        lmr_reduction(depth, move_number)
+    };
+    r += i32::from(ctx.cut_node);
+    r -= i32::from(ctx.improving);
+    r -= i32::from(ctx.pv_node);
+    r -= i32::from(ctx.killer);
+    r
+}
+
+/// Tabela `[profundidade][número do lance]` a partir de `formula(ln(profundidade), ln(número))`,
+/// truncada.
+fn build_lmr_table(formula: fn(f64, f64) -> f64) -> [[i32; 64]; 64] {
     let mut table = [[0; 64]; 64];
     for (depth, row) in table.iter_mut().enumerate().skip(1) {
         for (number, cell) in row.iter_mut().enumerate().skip(1) {
-            *cell = (0.75 + (depth as f64).ln() * (number as f64).ln() / 2.25) as i32;
+            *cell = formula((depth as f64).ln(), (number as f64).ln()) as i32;
         }
     }
     table
-});
+}
+
+/// Quietos: `0.75 + ln(profundidade)·ln(número do lance)/2.25`, arredondado para baixo.
+static LMR_TABLE: LazyLock<[[i32; 64]; 64]> =
+    LazyLock::new(|| build_lmr_table(|d, n| 0.75 + d * n / 2.25));
+
+/// Táticos: bem menos que os quietos, `ln(profundidade)·ln(número do lance)/3.5 − 0.25`.
+static LMR_TACTICAL_TABLE: LazyLock<[[i32; 64]; 64]> =
+    LazyLock::new(|| build_lmr_table(|d, n| d * n / 3.5 - 0.25));
 
 /// O que cada thread aprende por conta própria durante a busca (a TT é de todos).
 struct ThreadTables {
     history: Box<History>,
     continuation: Box<ContinuationHistory>,
     captures: Box<CaptureHistory>,
+    continuation4: Box<ContinuationHistory>,
     correction: Box<CorrectionHistory>,
 }
 
@@ -353,6 +412,7 @@ impl ThreadTables {
             history: History::new(),
             continuation: ContinuationHistory::new(),
             captures: CaptureHistory::new(),
+            continuation4: ContinuationHistory::new(),
             correction: CorrectionHistory::new(),
         }
     }
@@ -361,6 +421,7 @@ impl ThreadTables {
         self.history.clear();
         self.continuation.clear();
         self.captures.clear();
+        self.continuation4.clear();
         self.correction.clear();
     }
 }
@@ -593,11 +654,13 @@ fn new_state<'a>(
         accumulators: network.map_or_else(Vec::new, |net| {
             vec![Accumulators::new(net, root); MAX_PLY + 2]
         }),
+        refresh_cache: network.map(RefreshCache::new),
         network,
         tt,
         history: &mut tables.history,
         continuation: &mut tables.continuation,
         captures: &mut tables.captures,
+        continuation4: &mut tables.continuation4,
         correction: &mut tables.correction,
         killers: vec![[None, None]; MAX_PLY + 2],
         evals: vec![-INFINITY; MAX_PLY + 2],
@@ -617,6 +680,8 @@ fn new_state<'a>(
         pv: (0..=MAX_PLY).map(|_| Vec::with_capacity(MAX_PLY)).collect(),
         after_null: vec![false; MAX_PLY + 2],
         moved: vec![None; MAX_PLY + 2],
+        quiet_played: vec![None; MAX_PLY + 2],
+        threats: vec![Bitboard::EMPTY; MAX_PLY + 2],
         excluded: vec![None; MAX_PLY + 2],
     }
 }
@@ -627,6 +692,8 @@ struct SearchState<'a> {
     history: &'a mut History,
     continuation: &'a mut ContinuationHistory,
     captures: &'a mut CaptureHistory,
+    /// Continuação pelo nosso lance de quatro meios-lances atrás.
+    continuation4: &'a mut ContinuationHistory,
     correction: &'a mut CorrectionHistory,
     /// Até dois lances quietos que causaram corte em cada nível.
     killers: Vec<[Option<Move>; 2]>,
@@ -657,12 +724,19 @@ struct SearchState<'a> {
     after_null: Vec<bool>,
     /// `moved[ply]`: lance jogado nesse nível no caminho atual (`None` para o lance nulo).
     moved: Vec<Option<PieceTo>>,
+    /// `quiet_played[ply]`: o lance desse nível, quando quieto (recebe bônus se o filho falhar
+    /// baixo).
+    quiet_played: Vec<Option<Move>>,
+    /// `threats[ply]`: casas atacadas pelo adversário na posição desse nível.
+    threats: Vec<Bitboard>,
     /// `excluded[ply]`: lance que a busca desse nível ignora (a busca singular testa se as
     /// alternativas ao lance da TT chegam perto dele).
     excluded: Vec<Option<Move>>,
     network: Option<&'a Network>,
     /// `accumulators[ply]`: camada oculta da rede na posição desse nível (vazio sem rede).
     accumulators: Vec<Accumulators>,
+    /// Cache de recálculo da rede para quando um rei troca de bucket (vazio sem rede).
+    refresh_cache: Option<RefreshCache>,
 }
 
 impl SearchState<'_> {
@@ -683,13 +757,13 @@ impl SearchState<'_> {
     /// Janela estreita em volta da pontuação da iteração anterior, alargada a cada falha.
     fn aspiration(&mut self, root: &Position, depth: i32, previous: i32) -> i32 {
         if depth < 4 {
-            return self.negamax(root, depth, -INFINITY, INFINITY, 0, true);
+            return self.negamax(root, depth, -INFINITY, INFINITY, 0, true, false);
         }
         let mut delta = 25;
         let mut alpha = (previous - delta).max(-INFINITY);
         let mut beta = (previous + delta).min(INFINITY);
         loop {
-            let score = self.negamax(root, depth, alpha, beta, 0, true);
+            let score = self.negamax(root, depth, alpha, beta, 0, true, false);
             if self.stopped {
                 return score;
             }
@@ -756,6 +830,11 @@ impl SearchState<'_> {
         self.stopped
     }
 
+    /// `cut_node`: tipo de nó esperado, para as reduções. A raiz e os nós PV nunca são de corte;
+    /// o primeiro filho de um nó de corte é de "todos" e vice-versa; as buscas reduzidas e de
+    /// janela nula dos lances tardios esperam um corte.
+    // Os parâmetros são as coordenadas do nó; agrupá-los só para o lint esconderia a recursão.
+    #[allow(clippy::too_many_arguments)]
     fn negamax(
         &mut self,
         pos: &Position,
@@ -764,6 +843,7 @@ impl SearchState<'_> {
         beta: i32,
         ply: usize,
         pv_node: bool,
+        cut_node: bool,
     ) -> i32 {
         self.pv[ply].clear();
         if ply > 0 {
@@ -844,6 +924,7 @@ impl SearchState<'_> {
                 let null = pos.make_null_move();
                 self.hashes.push(null.hash());
                 self.moved[ply] = None;
+                self.quiet_played[ply] = None;
                 self.push_null(ply);
                 self.after_null[ply + 1] = true;
                 let score = -self.negamax(
@@ -853,6 +934,7 @@ impl SearchState<'_> {
                     -beta + 1,
                     ply + 1,
                     false,
+                    !cut_node,
                 );
                 self.after_null[ply + 1] = false;
                 self.hashes.pop();
@@ -870,10 +952,14 @@ impl SearchState<'_> {
         generate_pseudo_legal(pos, &mut moves);
         let mut scores = [0i32; MAX_MOVES];
         let killers = self.killers[ply];
+        let threats = pos.attacked_by(us.flip());
+        self.threats[ply] = threats;
         let ordering = MoveOrdering {
             history: self.history,
             continuation: self.continuation,
+            continuation4: self.continuation4,
             captures: self.captures,
+            threats,
             previous: self.previous_moves(ply),
         };
         score_moves(pos, &moves, tt_move, killers, &ordering, &mut scores);
@@ -918,6 +1004,7 @@ impl SearchState<'_> {
                     singular_beta,
                     ply,
                     false,
+                    cut_node,
                 );
                 self.excluded[ply] = None;
                 if self.stopped {
@@ -929,7 +1016,7 @@ impl SearchState<'_> {
                     return singular_beta;
                 }
             }
-            let new_depth = depth - 1 + extension;
+            let mut new_depth = depth - 1 + extension;
             let prunable = !pv_node && !in_check && best_score > -MATE_BOUND && !next.in_check();
             if prunable && depth <= SEE_PRUNE_MAX_DEPTH {
                 // Lance que, na troca de peças na casa de destino, perde material demais para a
@@ -960,38 +1047,66 @@ impl SearchState<'_> {
             self.moved[ply] = pos
                 .piece_at(mv.from())
                 .map(|piece| PieceTo { piece, to: mv.to() });
-            self.push_move(pos, mv, ply);
+            self.quiet_played[ply] = quiet.then_some(mv);
+            self.push_move(pos, &next, mv, ply);
             let score = if legal == 1 {
-                -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
+                -self.negamax(
+                    &next,
+                    new_depth,
+                    -beta,
+                    -alpha,
+                    ply + 1,
+                    pv_node,
+                    !pv_node && !cut_node,
+                )
             } else {
-                // Lances tardios e quietos: primeiro uma busca reduzida; se surpreender, refaz.
+                // Lances tardios: primeiro uma busca reduzida; se surpreender, refaz. Capturas e
+                // xeques também reduzem, só que menos.
                 let late = legal > if pv_node { 3 } else { 2 };
-                let reduction =
-                    if depth >= LMR_MIN_DEPTH && late && quiet && !in_check && !next.in_check() {
-                        let mut r = lmr_reduction(depth, legal);
-                        if pv_node {
-                            r -= 1;
-                        }
-                        if killers.contains(&Some(mv)) {
-                            r -= 1;
-                        }
-                        r.clamp(0, new_depth - 1)
-                    } else {
-                        0
+                let reduction = if depth >= LMR_MIN_DEPTH && late && !in_check {
+                    let ctx = LmrContext {
+                        tactical: !quiet || next.in_check(),
+                        cut_node,
+                        improving,
+                        pv_node,
+                        killer: killers.contains(&Some(mv)),
                     };
+                    late_move_reduction(depth, legal, ctx).clamp(0, new_depth - 1)
+                } else {
+                    0
+                };
+                let reduced_depth = new_depth - reduction;
                 let mut score = -self.negamax(
                     &next,
-                    new_depth - reduction,
+                    reduced_depth,
                     -alpha - 1,
                     -alpha,
                     ply + 1,
                     false,
+                    reduction > 0 || !cut_node,
                 );
                 if reduction > 0 && score > alpha {
-                    score = -self.negamax(&next, new_depth, -alpha - 1, -alpha, ply + 1, false);
+                    // Passou com folga do melhor até aqui: vale um nível a mais; passou raspando:
+                    // um a menos basta.
+                    if score > best_score + LMR_DEEPER_BASE + LMR_DEEPER_MARGIN * new_depth {
+                        new_depth += 1;
+                    } else if score < best_score + LMR_SHALLOWER_MARGIN {
+                        new_depth -= 1;
+                    }
+                    if new_depth > reduced_depth {
+                        score = -self.negamax(
+                            &next,
+                            new_depth,
+                            -alpha - 1,
+                            -alpha,
+                            ply + 1,
+                            false,
+                            !cut_node,
+                        );
+                    }
                 }
                 if pv_node && score > alpha && score < beta {
-                    score = -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, true);
+                    score = -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, true, false);
                 }
                 score
             };
@@ -1039,6 +1154,9 @@ impl SearchState<'_> {
         } else {
             Bound::Upper
         };
+        if bound == Bound::Upper {
+            self.reward_parent_quiet(depth, ply);
+        }
         let quiet_best = best_move.is_none_or(|mv| !is_tactical(pos, mv));
         if !in_check && quiet_best && correction_applies(bound, best_score, static_eval) {
             self.correction
@@ -1097,8 +1215,10 @@ impl SearchState<'_> {
         let ordering = MoveOrdering {
             history: self.history,
             continuation: self.continuation,
+            continuation4: self.continuation4,
             captures: self.captures,
-            previous: [None, None],
+            threats: Bitboard::EMPTY,
+            previous: [None, None, None],
         };
         score_moves(pos, &moves, tt_move, [None, None], &ordering, &mut scores);
         let us = pos.side_to_move();
@@ -1114,7 +1234,7 @@ impl SearchState<'_> {
                 continue;
             }
             legal += 1;
-            self.push_move(pos, mv, ply);
+            self.push_move(pos, &next, mv, ply);
             let score = -self.quiescence(&next, -beta, -alpha, ply + 1);
             if self.stopped {
                 return 0;
@@ -1168,10 +1288,11 @@ impl SearchState<'_> {
         score.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
-    /// Prepara a camada oculta do nível seguinte para o lance `mv`.
-    fn push_move(&mut self, pos: &Position, mv: Move, ply: usize) {
-        if let Some(net) = self.network {
-            self.accumulators[ply + 1] = self.accumulators[ply].after_move(net, pos, mv);
+    /// Prepara a camada oculta do nível seguinte, `next`, para o lance `mv`.
+    fn push_move(&mut self, pos: &Position, next: &Position, mv: Move, ply: usize) {
+        if let (Some(net), Some(cache)) = (self.network, self.refresh_cache.as_mut()) {
+            let (done, rest) = self.accumulators.split_at_mut(ply + 1);
+            done[ply].after_move(&mut rest[0], net, pos, next, mv, cache);
         }
     }
 
@@ -1191,10 +1312,16 @@ impl SearchState<'_> {
     /// Lance quieto que causou corte: bônus no histórico, punição para os quietos que falharam
     /// antes dele, e vira killer deste nível.
     fn reward_quiet(&mut self, pos: &Position, mv: Move, tried: &MoveList, bonus: i32, ply: usize) {
+        let us = pos.side_to_move();
+        let threats = self.threats[ply];
         let previous = self.previous_moves(ply);
-        self.update_quiet_histories(pos, previous, mv, bonus);
-        for other in tried {
-            self.update_quiet_histories(pos, previous, other, -bonus);
+        for (other, bonus) in [(mv, bonus)]
+            .into_iter()
+            .chain(tried.iter().map(|m| (m, -bonus)))
+        {
+            if let Some(piece) = pos.piece_at(other.from()) {
+                self.update_quiet_histories(us, piece, other, threats, previous, bonus);
+            }
         }
         let slots = &mut self.killers[ply];
         if slots[0] != Some(mv) {
@@ -1203,26 +1330,45 @@ impl SearchState<'_> {
         }
     }
 
-    /// Os dois lances que levaram ao nó `ply`: o do adversário e o nosso antes dele.
-    fn previous_moves(&self, ply: usize) -> [Option<PieceTo>; 2] {
-        [
-            ply.checked_sub(1).and_then(|p| self.moved[p]),
-            ply.checked_sub(2).and_then(|p| self.moved[p]),
-        ]
+    /// O nó `ply` falhou baixo: o lance quieto do pai que levou até aqui foi bom para ele e ganha
+    /// um bônus pequeno nos históricos do pai.
+    fn reward_parent_quiet(&mut self, depth: i32, ply: usize) {
+        let Some(parent) = ply.checked_sub(1) else {
+            return;
+        };
+        let (Some(mv), Some(moved)) = (self.quiet_played[parent], self.moved[parent]) else {
+            return;
+        };
+        let bonus = (6 * depth * depth).min(600);
+        let previous = self.previous_moves(parent);
+        let threats = self.threats[parent];
+        self.update_quiet_histories(moved.piece.color, moved.piece, mv, threats, previous, bonus);
     }
 
+    /// Os lances que levaram ao nó `ply`: o do adversário, o nosso antes dele e o nosso de quatro
+    /// meios-lances atrás.
+    fn previous_moves(&self, ply: usize) -> [Option<PieceTo>; 3] {
+        let at = |back: usize| ply.checked_sub(back).and_then(|p| self.moved[p]);
+        [at(1), at(2), at(4)]
+    }
+
+    /// Soma `bonus` ao lance quieto `mv` da peça `piece` (cor `us`) num nó com ameaças `threats`
+    /// e lances anteriores `previous`.
     fn update_quiet_histories(
         &mut self,
-        pos: &Position,
-        previous: [Option<PieceTo>; 2],
+        us: Color,
+        piece: Piece,
         mv: Move,
+        threats: Bitboard,
+        previous: [Option<PieceTo>; 3],
         bonus: i32,
     ) {
-        self.history.update(pos.side_to_move(), mv, bonus);
-        if let Some(piece) = pos.piece_at(mv.from()) {
-            for previous in previous.into_iter().flatten() {
-                self.continuation.update(previous, piece, mv.to(), bonus);
-            }
+        self.history.update(us, mv, threats, bonus);
+        for previous in previous[..2].iter().flatten() {
+            self.continuation.update(*previous, piece, mv.to(), bonus);
+        }
+        if let Some(previous) = previous[2] {
+            self.continuation4.update(previous, piece, mv.to(), bonus);
         }
     }
 
@@ -1642,16 +1788,16 @@ mod tests {
         let mut history = History::new();
         let mv = quiet("g1", "f3");
         for _ in 0..1_000 {
-            history.update(Color::White, mv, 1_600);
+            history.update(Color::White, mv, Bitboard::EMPTY, 1_600);
         }
-        let high = history.get(Color::White, mv);
+        let high = history.get(Color::White, mv, Bitboard::EMPTY);
         assert!((10_001..=HISTORY_MAX).contains(&high), "{high}");
         for _ in 0..1_000 {
-            history.update(Color::White, mv, -1_600);
+            history.update(Color::White, mv, Bitboard::EMPTY, -1_600);
         }
-        let low = history.get(Color::White, mv);
+        let low = history.get(Color::White, mv, Bitboard::EMPTY);
         assert!((-HISTORY_MAX..-10_000).contains(&low), "{low}");
-        assert_eq!(history.get(Color::Black, mv), 0);
+        assert_eq!(history.get(Color::Black, mv, Bitboard::EMPTY), 0);
     }
 
     #[test]
@@ -1718,6 +1864,86 @@ mod tests {
         assert!(lmr_reduction(20, 40) >= 4);
     }
 
+    /// Todas as combinações de contexto de um lance tardio.
+    fn every_lmr_context() -> Vec<LmrContext> {
+        (0..32u8)
+            .map(|bits| LmrContext {
+                tactical: bits & 1 != 0,
+                cut_node: bits & 2 != 0,
+                improving: bits & 4 != 0,
+                pv_node: bits & 8 != 0,
+                killer: bits & 16 != 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn late_move_reduction_is_monotonic_in_each_factor() {
+        for ctx in every_lmr_context() {
+            for depth in 1..40 {
+                for number in 1..60 {
+                    let r = late_move_reduction(depth, number, ctx);
+                    assert!(late_move_reduction(depth + 1, number, ctx) >= r);
+                    assert!(late_move_reduction(depth, number + 1, ctx) >= r);
+                    let with = |change: fn(&mut LmrContext)| {
+                        let mut other = ctx;
+                        change(&mut other);
+                        late_move_reduction(depth, number, other)
+                    };
+                    // Nó de corte esperado reduz mais; melhorando, PV e killer reduzem menos;
+                    // capturas e xeques reduzem menos que quietos.
+                    assert!(with(|c| c.cut_node = true) >= with(|c| c.cut_node = false));
+                    assert!(with(|c| c.improving = true) <= with(|c| c.improving = false));
+                    assert!(with(|c| c.pv_node = true) <= with(|c| c.pv_node = false));
+                    assert!(with(|c| c.killer = true) <= with(|c| c.killer = false));
+                    assert!(with(|c| c.tactical = true) <= with(|c| c.tactical = false));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn late_move_reduction_factors_actually_change_the_reduction() {
+        let base = LmrContext {
+            tactical: false,
+            cut_node: false,
+            improving: false,
+            pv_node: false,
+            killer: false,
+        };
+        let r = late_move_reduction(12, 20, base);
+        assert!(
+            late_move_reduction(
+                12,
+                20,
+                LmrContext {
+                    cut_node: true,
+                    ..base
+                }
+            ) > r
+        );
+        assert!(
+            late_move_reduction(
+                12,
+                20,
+                LmrContext {
+                    improving: true,
+                    ..base
+                }
+            ) < r
+        );
+        // Capturas e xeques agora também são reduzidos, mas menos que os quietos.
+        let tactical = late_move_reduction(
+            12,
+            20,
+            LmrContext {
+                tactical: true,
+                ..base
+            },
+        );
+        assert!(tactical >= 1 && tactical < r);
+    }
+
     #[test]
     fn move_ordering_puts_killers_between_captures_and_quiets() {
         // Brancas: Nxe5 ganha um peão solto; Nf3-g5 é killer; Bc4-b5 tem histórico; a2-a3 não
@@ -1728,15 +1954,17 @@ mod tests {
         let mut moves = MoveList::new();
         generate_pseudo_legal(&pos, &mut moves);
         let mut history = History::new();
-        history.update(Color::White, quiet("c4", "b5"), 900);
+        history.update(Color::White, quiet("c4", "b5"), Bitboard::EMPTY, 900);
         let killer = quiet("f3", "g5");
         let continuation = ContinuationHistory::new();
         let captures = CaptureHistory::new();
         let ordering = MoveOrdering {
             history: &history,
             continuation: &continuation,
+            continuation4: &continuation,
             captures: &captures,
-            previous: [None, None],
+            threats: Bitboard::EMPTY,
+            previous: [None, None, None],
         };
         let mut scores = [0i32; MAX_MOVES];
         score_moves(
@@ -1791,17 +2019,20 @@ mod tests {
         let mut moves = MoveList::new();
         generate_pseudo_legal(&pos, &mut moves);
         let mut history = History::new();
-        history.update(Color::Black, quiet("g8", "f6"), 100);
+        history.update(Color::Black, quiet("g8", "f6"), Bitboard::EMPTY, 100);
         let mut continuation = ContinuationHistory::new();
+        let continuation4 = ContinuationHistory::new();
         let after_e4 = piece_to("P", "e4");
         let knight = piece_to("n", "c6");
         continuation.update(after_e4, knight.piece, knight.to, 2_000);
         let captures = CaptureHistory::new();
-        let order = |previous: [Option<PieceTo>; 2]| {
+        let order = |previous: [Option<PieceTo>; 3]| {
             let ordering = MoveOrdering {
                 history: &history,
                 continuation: &continuation,
+                continuation4: &continuation4,
                 captures: &captures,
+                threats: Bitboard::EMPTY,
                 previous,
             };
             let mut scores = [0i32; MAX_MOVES];
@@ -1812,9 +2043,9 @@ mod tests {
             };
             (score_of("b8c6"), score_of("g8f6"))
         };
-        let (c6, f6) = order([Some(after_e4), None]);
+        let (c6, f6) = order([Some(after_e4), None, None]);
         assert!(c6 > f6, "{c6} {f6}");
-        let (c6, f6) = order([None, None]);
+        let (c6, f6) = order([None, None, None]);
         assert!(f6 > c6, "{c6} {f6}");
     }
 
@@ -1902,8 +2133,10 @@ mod tests {
             let ordering = MoveOrdering {
                 history: &history,
                 continuation: &continuation,
+                continuation4: &continuation,
                 captures,
-                previous: [None, None],
+                threats: Bitboard::EMPTY,
+                previous: [None, None, None],
             };
             let mut scores = [0i32; MAX_MOVES];
             score_moves(&pos, &moves, None, [None, None], &ordering, &mut scores);
@@ -1940,6 +2173,93 @@ mod tests {
             rxh7 > bxc6 && bxc6 > a3 && a3 > nxd5,
             "{nxd5} {rxh7} {bxc6} {a3}"
         );
+    }
+
+    #[test]
+    fn history_is_split_by_threats_on_the_from_and_to_squares() {
+        let mut history = History::new();
+        let mv = quiet("c3", "e4");
+        let from = Bitboard::from_square("c3".parse().unwrap());
+        let to = Bitboard::from_square("e4".parse().unwrap());
+        history.update(Color::White, mv, from, 1_000);
+        assert!(history.get(Color::White, mv, from) > 0);
+        // Atacar outra casa qualquer não muda o balde; atacar a origem ou o destino muda.
+        let elsewhere = Bitboard::from_square("h7".parse().unwrap());
+        assert_eq!(
+            history.get(Color::White, mv, elsewhere | from),
+            history.get(Color::White, mv, from)
+        );
+        assert_eq!(history.get(Color::White, mv, Bitboard::EMPTY), 0);
+        assert_eq!(history.get(Color::White, mv, to), 0);
+        assert_eq!(history.get(Color::White, mv, from | to), 0);
+        history.update(Color::White, mv, from | to, -1_000);
+        assert!(history.get(Color::White, mv, from | to) < 0);
+        assert!(history.get(Color::White, mv, from) > 0);
+    }
+
+    #[test]
+    fn move_ordering_follows_our_move_two_turns_ago() {
+        // A continuação de quatro meios-lances atrás (o nosso lance anterior ao anterior) pesa na
+        // ordenação: com ele conhecido, Nc6 passa Nf6, que só tem histórico simples.
+        let pos = Position::from_fen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1")
+            .unwrap();
+        let mut moves = MoveList::new();
+        generate_pseudo_legal(&pos, &mut moves);
+        let mut history = History::new();
+        history.update(Color::Black, quiet("g8", "f6"), Bitboard::EMPTY, 100);
+        let continuation = ContinuationHistory::new();
+        let mut continuation4 = ContinuationHistory::new();
+        let earlier = piece_to("p", "a6");
+        let knight = piece_to("n", "c6");
+        continuation4.update(earlier, knight.piece, knight.to, 2_000);
+        let captures = CaptureHistory::new();
+        let order = |previous: [Option<PieceTo>; 3]| {
+            let ordering = MoveOrdering {
+                history: &history,
+                continuation: &continuation,
+                continuation4: &continuation4,
+                captures: &captures,
+                threats: Bitboard::EMPTY,
+                previous,
+            };
+            let mut scores = [0i32; MAX_MOVES];
+            score_moves(&pos, &moves, None, [None, None], &ordering, &mut scores);
+            let score_of = |uci: &str| {
+                let i = moves.iter().position(|m| m.to_uci(false) == uci).unwrap();
+                scores[i]
+            };
+            (score_of("b8c6"), score_of("g8f6"))
+        };
+        let (c6, f6) = order([None, None, Some(earlier)]);
+        assert!(c6 > f6, "{c6} {f6}");
+        // No lugar do lance de dois atrás, a tabela de quatro meios-lances não é consultada.
+        let (c6, f6) = order([None, Some(earlier), None]);
+        assert!(f6 > c6, "{c6} {f6}");
+    }
+
+    #[test]
+    fn a_fail_low_rewards_the_parents_quiet_move() {
+        let stop = AtomicBool::new(false);
+        let limits = Limits::default();
+        let mut searcher = Searcher::new(16);
+        // As pretas, sem nada contra duas damas, falham baixo: o lance quieto das brancas que
+        // levou até aqui (Qa2-a1) ganha bônus no histórico delas.
+        let pos = Position::from_fen("4k3/8/8/8/8/8/8/QQ2K3 b - - 0 1").unwrap();
+        let parent = quiet("a2", "a1");
+        let run = |searcher: &mut Searcher, quiet_parent: bool, alpha: i32| {
+            let mut state = searcher.start(&pos, &[], &limits, &stop);
+            state.moved[0] = Some(piece_to("Q", "a1"));
+            state.quiet_played[0] = quiet_parent.then_some(parent);
+            state.threats[0] = Bitboard::EMPTY;
+            state.negamax(&pos, 2, alpha, alpha + 1, 1, false, false);
+            state.history.get(Color::White, parent, Bitboard::EMPTY)
+        };
+        assert!(run(&mut searcher, true, 0) > 0);
+        // Sem falha baixa (as pretas passam de alpha) ou com lance anterior que não é quieto, nada.
+        searcher.clear();
+        assert_eq!(run(&mut searcher, true, -30_000), 0);
+        searcher.clear();
+        assert_eq!(run(&mut searcher, false, 0), 0);
     }
 
     #[test]
@@ -1981,7 +2301,7 @@ mod tests {
             .store(pos.hash(), Some(only), 50, 20, Bound::Lower);
         let mut state = searcher.start(&pos, &[], &limits, &stop);
         state.excluded[1] = Some(only);
-        let score = state.negamax(&pos, 3, -100, 100, 1, false);
+        let score = state.negamax(&pos, 3, -100, 100, 1, false, false);
         assert_eq!(score, -100);
         let entry = searcher.tt.probe(pos.hash()).unwrap();
         assert_eq!((entry.mv, entry.score, entry.depth), (Some(only), 50, 20));
