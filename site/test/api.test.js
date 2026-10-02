@@ -6,6 +6,8 @@ import { summarizeGames, record, parseLeaderboard, windowAround } from "../api/_
 const NDJSON = [
   {
     id: "aaaa1111",
+    source: "arena",
+    arenaTour: { id: "fj11wTjI", name: "Daily BOT Tournament 08-10-26 Arena" },
     rated: true,
     speed: "blitz",
     createdAt: 1790939985642,
@@ -45,7 +47,9 @@ test("games are summarised from the bot's side", () => {
     rated: true,
     status: "mate",
     at: 1790939985642,
+    tournament: "fj11wTjI",
   });
+  assert.equal(games[1].tournament, null);
   assert.equal(games[1].result, "draw");
   assert.equal(games[1].color, "white");
 });

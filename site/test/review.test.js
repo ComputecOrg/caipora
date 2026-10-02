@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildPositions } from "../public/js/lib/game.js";
-import { classifyMoves, accuracies, LABELS } from "../public/js/lib/review.js";
+import { classifyMoves, accuracies, gameSummary, terminalEval, LABELS } from "../public/js/lib/review.js";
 import { NdjsonSplitter, movesFromStream } from "../public/js/lib/stream.js";
 
 const deep = (cp, pv = []) => ({ depth: 20, score: { cp }, pv });
@@ -55,4 +55,28 @@ test("stream events become the move list in SAN with clocks", () => {
   assert.equal(game.startFen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
   assert.deepEqual(game.moves, ["e4", "c5"]);
   assert.deepEqual(game.clock, { white: 179, black: 177 });
+});
+
+test("the game summary has accuracy, phases and counts per side, and how much was analysed", () => {
+  const positions = buildPositions(["e4", "e5", "Qh5"]);
+  const evals = [deep(30, ["e2e4"]), deep(35, ["e7e5"]), deep(30, ["g1f3"]), deep(-400, ["g8f6"])];
+  const s = gameSummary(positions, evals, [], 18);
+  assert.deepEqual({ analysed: s.analysed, total: s.total }, { analysed: 3, total: 3 });
+  assert.equal(s.white.counts.blunder, 1);
+  assert.equal(s.black.counts.best, 1);
+  assert.ok(s.white.accuracy < s.black.accuracy, JSON.stringify([s.white.accuracy, s.black.accuracy]));
+  assert.ok(s.white.phases.opening !== undefined);
+  // Lances sem análise ficam fora e aparecem na contagem.
+  const partial = gameSummary(positions, [evals[0], evals[1]], [], 18);
+  assert.deepEqual({ analysed: partial.analysed, total: partial.total }, { analysed: 1, total: 3 });
+});
+
+test("finished positions get their known evaluation, so the engine never has to analyse them", () => {
+  // Mate do pastor: as pretas, a jogar, levaram mate.
+  const mated = "r1bqkb1r/pppp1Qpp/2n2n2/4p3/2B1P3/8/PPPP1PPP/RNB1K1NR b KQkq - 0 4";
+  assert.deepEqual(terminalEval(mated), { depth: Infinity, score: { cp: 10000 }, pv: [] });
+  // Afogamento: empate.
+  assert.deepEqual(terminalEval("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"), { depth: Infinity, score: { cp: 0 }, pv: [] });
+  // Posição normal: nada.
+  assert.equal(terminalEval("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"), null);
 });

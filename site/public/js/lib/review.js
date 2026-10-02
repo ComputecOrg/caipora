@@ -3,6 +3,7 @@
 import { Chess } from "./chess.js";
 import { expectedPoints, classifyChessCom, gameAccuracy, materialOf, winningChances, scoreToCp } from "./analysis.js";
 import { uciLineToSan } from "./game.js";
+import { summarize, phaseOf } from "./summary.js";
 
 export const LABELS = {
   brilliant: { label: "Brilliant", symbol: "!!", color: "#26a69a" },
@@ -81,4 +82,43 @@ export function accuracies(positions, evals, depth) {
     moves[side].push({ before: win(before.score), after: win(after.score) });
   }
   return { white: gameAccuracy(moves.w), black: gameAccuracy(moves.b) };
+}
+
+/**
+ * Resumo da partida para o cartão de fim de jogo: por lado, a precisão geral, a de cada fase e as
+ * contagens por categoria (`summarize` da extensão), mais quantos lances já têm análise.
+ */
+export function gameSummary(positions, evals, seconds, depth) {
+  const verdicts = classifyMoves(positions, evals, seconds, depth);
+  const moves = [];
+  for (let k = 1; k < positions.length; k++) {
+    const v = verdicts[k];
+    if (!v) continue;
+    const sign = v.moverWhite ? 1 : -1;
+    const win = (score) => 50 + 50 * winningChances(sign * scoreToCp(score));
+    moves.push({
+      white: v.moverWhite,
+      category: v.category,
+      winBefore: win(evals[k - 1].score),
+      winAfter: win(evals[k].score),
+      phase: phaseOf(positions[k - 1].fen),
+    });
+  }
+  return { ...summarize(moves), analysed: moves.length, total: positions.length - 1 };
+}
+
+/**
+ * Avaliação já conhecida de uma posição terminada (do lado das brancas), ou null: o Stockfish não
+ * devolve linha nenhuma para mate ou afogamento, e o agendador ficaria pedindo a mesma posição.
+ */
+export function terminalEval(fen) {
+  const chess = new Chess(fen);
+  if (chess.isCheckmate()) {
+    // Quem está para jogar levou mate.
+    return { depth: Infinity, score: { cp: chess.turn() === "w" ? -10000 : 10000 }, pv: [] };
+  }
+  if (chess.isStalemate() || chess.isInsufficientMaterial()) {
+    return { depth: Infinity, score: { cp: 0 }, pv: [] };
+  }
+  return null;
 }
