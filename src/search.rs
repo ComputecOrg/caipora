@@ -26,6 +26,12 @@ const RFP_MAX_DEPTH: i32 = 8;
 const RFP_MARGIN: i32 = 80;
 const NMP_MIN_DEPTH: i32 = 3;
 const LMR_MIN_DEPTH: i32 = 3;
+/// Depois de uma busca reduzida que passa de alpha, a nova busca vai um nível mais fundo se a
+/// pontuação superar a melhor até aqui por `BASE + MARGIN·profundidade`, e um mais rasa se a
+/// superar por menos de `SHALLOWER`.
+const LMR_DEEPER_BASE: i32 = 40;
+const LMR_DEEPER_MARGIN: i32 = 4;
+const LMR_SHALLOWER_MARGIN: i32 = 10;
 const IIR_MIN_DEPTH: i32 = 4;
 const LMP_MAX_DEPTH: i32 = 8;
 const FUTILITY_MAX_DEPTH: i32 = 6;
@@ -248,21 +254,57 @@ fn correction_applies(bound: Bound, best_score: i32, static_eval: i32) -> bool {
     }
 }
 
-/// Redução base do LMR para a profundidade e o número do lance (1 = primeiro lance legal).
+/// Redução base do LMR de um lance quieto para a profundidade e o número do lance (1 = primeiro
+/// lance legal).
 fn lmr_reduction(depth: i32, move_number: usize) -> i32 {
     LMR_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
 }
 
-/// `0.75 + ln(profundidade)·ln(número do lance)/2.25`, arredondado para baixo.
-static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
+/// O que, além da profundidade e do número do lance, muda a redução de um lance tardio.
+#[derive(Clone, Copy, Debug)]
+struct LmrContext {
+    /// Captura, promoção ou lance que dá xeque: reduz menos que um quieto.
+    tactical: bool,
+    /// Nó em que se espera um corte: se o primeiro lance não cortou, os tardios valem pouco.
+    cut_node: bool,
+    improving: bool,
+    pv_node: bool,
+    killer: bool,
+}
+
+/// Redução de um lance tardio, sem limites (quem chama prende entre 0 e a profundidade).
+fn late_move_reduction(depth: i32, move_number: usize, ctx: LmrContext) -> i32 {
+    let mut r = if ctx.tactical {
+        LMR_TACTICAL_TABLE[(depth.max(0) as usize).min(63)][move_number.min(63)]
+    } else {
+        lmr_reduction(depth, move_number)
+    };
+    r += i32::from(ctx.cut_node);
+    r -= i32::from(ctx.improving);
+    r -= i32::from(ctx.pv_node);
+    r -= i32::from(ctx.killer);
+    r
+}
+
+/// Tabela `[profundidade][número do lance]` a partir de `formula(ln(profundidade), ln(número))`,
+/// truncada.
+fn build_lmr_table(formula: fn(f64, f64) -> f64) -> [[i32; 64]; 64] {
     let mut table = [[0; 64]; 64];
     for (depth, row) in table.iter_mut().enumerate().skip(1) {
         for (number, cell) in row.iter_mut().enumerate().skip(1) {
-            *cell = (0.75 + (depth as f64).ln() * (number as f64).ln() / 2.25) as i32;
+            *cell = formula((depth as f64).ln(), (number as f64).ln()) as i32;
         }
     }
     table
-});
+}
+
+/// Quietos: `0.75 + ln(profundidade)·ln(número do lance)/2.25`, arredondado para baixo.
+static LMR_TABLE: LazyLock<[[i32; 64]; 64]> =
+    LazyLock::new(|| build_lmr_table(|d, n| 0.75 + d * n / 2.25));
+
+/// Táticos: bem menos que os quietos, `ln(profundidade)·ln(número do lance)/3.5 − 0.25`.
+static LMR_TACTICAL_TABLE: LazyLock<[[i32; 64]; 64]> =
+    LazyLock::new(|| build_lmr_table(|d, n| d * n / 3.5 - 0.25));
 
 /// O que cada thread aprende por conta própria durante a busca (a TT é de todos).
 struct ThreadTables {
@@ -616,13 +658,13 @@ impl SearchState<'_> {
     /// Janela estreita em volta da pontuação da iteração anterior, alargada a cada falha.
     fn aspiration(&mut self, root: &Position, depth: i32, previous: i32) -> i32 {
         if depth < 4 {
-            return self.negamax(root, depth, -INFINITY, INFINITY, 0, true);
+            return self.negamax(root, depth, -INFINITY, INFINITY, 0, true, false);
         }
         let mut delta = 25;
         let mut alpha = (previous - delta).max(-INFINITY);
         let mut beta = (previous + delta).min(INFINITY);
         loop {
-            let score = self.negamax(root, depth, alpha, beta, 0, true);
+            let score = self.negamax(root, depth, alpha, beta, 0, true, false);
             if self.stopped {
                 return score;
             }
@@ -689,6 +731,11 @@ impl SearchState<'_> {
         self.stopped
     }
 
+    /// `cut_node`: tipo de nó esperado, para as reduções. A raiz e os nós PV nunca são de corte;
+    /// o primeiro filho de um nó de corte é de "todos" e vice-versa; as buscas reduzidas e de
+    /// janela nula dos lances tardios esperam um corte.
+    // Os parâmetros são as coordenadas do nó; agrupá-los só para o lint esconderia a recursão.
+    #[allow(clippy::too_many_arguments)]
     fn negamax(
         &mut self,
         pos: &Position,
@@ -697,6 +744,7 @@ impl SearchState<'_> {
         beta: i32,
         ply: usize,
         pv_node: bool,
+        cut_node: bool,
     ) -> i32 {
         self.pv[ply].clear();
         if ply > 0 {
@@ -787,6 +835,7 @@ impl SearchState<'_> {
                     -beta + 1,
                     ply + 1,
                     false,
+                    !cut_node,
                 );
                 self.after_null[ply + 1] = false;
                 self.hashes.pop();
@@ -854,6 +903,7 @@ impl SearchState<'_> {
                     singular_beta,
                     ply,
                     false,
+                    cut_node,
                 );
                 self.excluded[ply] = None;
                 if self.stopped {
@@ -865,7 +915,7 @@ impl SearchState<'_> {
                     return singular_beta;
                 }
             }
-            let new_depth = depth - 1 + extension;
+            let mut new_depth = depth - 1 + extension;
             let prunable = !pv_node && !in_check && best_score > -MATE_BOUND && !next.in_check();
             if prunable && depth <= SEE_PRUNE_MAX_DEPTH {
                 // Lance que, na troca de peças na casa de destino, perde material demais para a
@@ -899,36 +949,63 @@ impl SearchState<'_> {
             self.quiet_played[ply] = quiet.then_some(mv);
             self.push_move(pos, mv, ply);
             let score = if legal == 1 {
-                -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
+                -self.negamax(
+                    &next,
+                    new_depth,
+                    -beta,
+                    -alpha,
+                    ply + 1,
+                    pv_node,
+                    !pv_node && !cut_node,
+                )
             } else {
-                // Lances tardios e quietos: primeiro uma busca reduzida; se surpreender, refaz.
+                // Lances tardios: primeiro uma busca reduzida; se surpreender, refaz. Capturas e
+                // xeques também reduzem, só que menos.
                 let late = legal > if pv_node { 3 } else { 2 };
-                let reduction =
-                    if depth >= LMR_MIN_DEPTH && late && quiet && !in_check && !next.in_check() {
-                        let mut r = lmr_reduction(depth, legal);
-                        if pv_node {
-                            r -= 1;
-                        }
-                        if killers.contains(&Some(mv)) {
-                            r -= 1;
-                        }
-                        r.clamp(0, new_depth - 1)
-                    } else {
-                        0
+                let reduction = if depth >= LMR_MIN_DEPTH && late && !in_check {
+                    let ctx = LmrContext {
+                        tactical: !quiet || next.in_check(),
+                        cut_node,
+                        improving,
+                        pv_node,
+                        killer: killers.contains(&Some(mv)),
                     };
+                    late_move_reduction(depth, legal, ctx).clamp(0, new_depth - 1)
+                } else {
+                    0
+                };
+                let reduced_depth = new_depth - reduction;
                 let mut score = -self.negamax(
                     &next,
-                    new_depth - reduction,
+                    reduced_depth,
                     -alpha - 1,
                     -alpha,
                     ply + 1,
                     false,
+                    reduction > 0 || !cut_node,
                 );
                 if reduction > 0 && score > alpha {
-                    score = -self.negamax(&next, new_depth, -alpha - 1, -alpha, ply + 1, false);
+                    // Passou com folga do melhor até aqui: vale um nível a mais; passou raspando:
+                    // um a menos basta.
+                    if score > best_score + LMR_DEEPER_BASE + LMR_DEEPER_MARGIN * new_depth {
+                        new_depth += 1;
+                    } else if score < best_score + LMR_SHALLOWER_MARGIN {
+                        new_depth -= 1;
+                    }
+                    if new_depth > reduced_depth {
+                        score = -self.negamax(
+                            &next,
+                            new_depth,
+                            -alpha - 1,
+                            -alpha,
+                            ply + 1,
+                            false,
+                            !cut_node,
+                        );
+                    }
                 }
                 if pv_node && score > alpha && score < beta {
-                    score = -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, true);
+                    score = -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, true, false);
                 }
                 score
             };
@@ -1680,6 +1757,86 @@ mod tests {
         assert!(lmr_reduction(20, 40) >= 4);
     }
 
+    /// Todas as combinações de contexto de um lance tardio.
+    fn every_lmr_context() -> Vec<LmrContext> {
+        (0..32u8)
+            .map(|bits| LmrContext {
+                tactical: bits & 1 != 0,
+                cut_node: bits & 2 != 0,
+                improving: bits & 4 != 0,
+                pv_node: bits & 8 != 0,
+                killer: bits & 16 != 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn late_move_reduction_is_monotonic_in_each_factor() {
+        for ctx in every_lmr_context() {
+            for depth in 1..40 {
+                for number in 1..60 {
+                    let r = late_move_reduction(depth, number, ctx);
+                    assert!(late_move_reduction(depth + 1, number, ctx) >= r);
+                    assert!(late_move_reduction(depth, number + 1, ctx) >= r);
+                    let with = |change: fn(&mut LmrContext)| {
+                        let mut other = ctx;
+                        change(&mut other);
+                        late_move_reduction(depth, number, other)
+                    };
+                    // Nó de corte esperado reduz mais; melhorando, PV e killer reduzem menos;
+                    // capturas e xeques reduzem menos que quietos.
+                    assert!(with(|c| c.cut_node = true) >= with(|c| c.cut_node = false));
+                    assert!(with(|c| c.improving = true) <= with(|c| c.improving = false));
+                    assert!(with(|c| c.pv_node = true) <= with(|c| c.pv_node = false));
+                    assert!(with(|c| c.killer = true) <= with(|c| c.killer = false));
+                    assert!(with(|c| c.tactical = true) <= with(|c| c.tactical = false));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn late_move_reduction_factors_actually_change_the_reduction() {
+        let base = LmrContext {
+            tactical: false,
+            cut_node: false,
+            improving: false,
+            pv_node: false,
+            killer: false,
+        };
+        let r = late_move_reduction(12, 20, base);
+        assert!(
+            late_move_reduction(
+                12,
+                20,
+                LmrContext {
+                    cut_node: true,
+                    ..base
+                }
+            ) > r
+        );
+        assert!(
+            late_move_reduction(
+                12,
+                20,
+                LmrContext {
+                    improving: true,
+                    ..base
+                }
+            ) < r
+        );
+        // Capturas e xeques agora também são reduzidos, mas menos que os quietos.
+        let tactical = late_move_reduction(
+            12,
+            20,
+            LmrContext {
+                tactical: true,
+                ..base
+            },
+        );
+        assert!(tactical >= 1 && tactical < r);
+    }
+
     #[test]
     fn move_ordering_puts_killers_between_captures_and_quiets() {
         // Brancas: Nxe5 ganha um peão solto; Nf3-g5 é killer; Bc4-b5 tem histórico; a2-a3 não
@@ -1905,7 +2062,7 @@ mod tests {
             .store(pos.hash(), Some(only), 50, 20, Bound::Lower);
         let mut state = searcher.start(&pos, &[], &limits, &stop);
         state.excluded[1] = Some(only);
-        let score = state.negamax(&pos, 3, -100, 100, 1, false);
+        let score = state.negamax(&pos, 3, -100, 100, 1, false, false);
         assert_eq!(score, -100);
         let entry = searcher.tt.probe(pos.hash()).unwrap();
         assert_eq!((entry.mv, entry.score, entry.depth), (Some(only), 50, 20));
