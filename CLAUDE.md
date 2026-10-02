@@ -83,6 +83,16 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
 - Torneios de bots: `scripts/tournament_join.py` (testes no mesmo `discover` acima), timer
   `caipora-tournaments` no servidor; ver `docs/lichess.md`.
 
+## Site (Caipora Live, pasta `site/`)
+- Site estático + funções da Vercel: partida ao vivo pelo fluxo público do Lichess, análise no
+  navegador (Stockfish 19 WASM, várias threads graças aos cabeçalhos COOP/COEP do `vercel.json`),
+  ranking dos bots, evolução de força e partidas recentes com revisão.
+- `cd site && npm install && npm test` (testes da lógica); `npm run build && node scripts/dev.mjs`
+  serve em http://localhost:3000 com os mesmos cabeçalhos e as funções de `api/`.
+- `api/games` e `api/h2h` usam `LICHESS_TOKEN` (token sem permissões, variável de ambiente da
+  Vercel): sem token, a lista de partidas do Lichess responde 404. Nunca usar o token do bot.
+- A pontuação de força do gráfico vem de `site/public/data/strength.json`: atualizar a cada versão.
+
 ## Arquitetura (não mudar sem ruling)
 - Casas em LERF (a1 = 0, h8 = 63). Bitboards por tipo e por cor + mailbox de 64 casas.
 - Roque guardado como casa da torre por cor e lado (cobre Chess960/DFRC); na saída UCI padrão o
