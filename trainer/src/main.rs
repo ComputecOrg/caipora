@@ -20,6 +20,7 @@
 //!   (peso `1 - wdl`).
 //! - A taxa de aprendizado cai em cosseno até 1% da inicial.
 //!
+//! Segundo estágio: `CAIPORA_RESUME=<checkpoint>` continua o treino de um checkpoint.
 //! Conferência: `caipora-trainer eval <checkpoint> <FEN>...` imprime a saída da rede em ponto
 //! flutuante (centipeões, do lado a jogar), para comparar com o `eval` da engine.
 //!
@@ -224,6 +225,12 @@ fn main() {
         batch_queue_size: 64,
     };
     println!("escala dos dados: {eval_scale}");
+    // Segundo estágio: continua de um checkpoint (pesos e estado do otimizador), em geral com wdl
+    // maior e lr menor que o primeiro.
+    if let Ok(checkpoint) = std::env::var("CAIPORA_RESUME") {
+        trainer.load_from_checkpoint(&checkpoint);
+        println!("continua de {checkpoint}");
+    }
     if data.ends_with(".binpack") {
         // Vários binpacks separados por vírgula, intercalados bloco a bloco e embaralhados em lotes
         // de 16 milhões de posições (~512 MB), sem cópia em disco.
