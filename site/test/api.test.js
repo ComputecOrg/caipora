@@ -84,3 +84,27 @@ test("the ranking window keeps the top and the bot's neighbourhood", () => {
   // Bot fora da lista: só o topo.
   assert.deepEqual(windowAround(rows, "nobody", { top: 3, around: 2 }).map((r) => r.rank), [1, 2, 3]);
 });
+
+test("current ratings re-rank the eligible bots, ties sharing a rank", async () => {
+  const { rerank } = await import("../api/_lib/lichess.js");
+  const rows = [
+    { rank: 1, name: "A", rating: 3000, delta: "", move: "" },
+    { rank: 2, name: "B", rating: 2990, delta: "", move: "" },
+    { rank: 3, name: "caiporaBot", rating: 2884, delta: "", move: "" },
+    { rank: 4, name: "D", rating: 2880, delta: "", move: "" },
+  ];
+  // Ratings atuais do Lichess (por id): o caiporaBot passou o B; C e D empatam.
+  const current = { a: 3001, b: 2900, caiporabot: 2950, d: 2900 };
+  const out = rerank(rows, current);
+  assert.deepEqual(out.map((r) => [r.rank, r.name, r.rating]), [
+    [1, "A", 3001],
+    [2, "caiporaBot", 2950],
+    [3, "B", 2900],
+    [3, "D", 2900],
+  ]);
+  // A variação é desde a lista (até 2 h atrás) até agora.
+  assert.equal(out.find((r) => r.name === "caiporaBot").delta, "+66");
+  assert.equal(out.find((r) => r.name === "B").delta, "-90");
+  // Bot sem rating atual (conta fechada, sem blitz) mantém o da lista.
+  assert.equal(rerank(rows, {}).find((r) => r.name === "A").rating, 3000);
+});

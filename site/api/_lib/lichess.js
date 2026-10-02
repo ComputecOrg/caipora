@@ -74,6 +74,42 @@ export function parseLeaderboard(html) {
   return { updated, rows };
 }
 
+/**
+ * Reordena os bots elegíveis pelos ratings atuais (`current`: id em minúsculas → rating de blitz),
+ * com empates dividindo a posição (1224); quem não tem rating atual fica com o da lista.
+ */
+export function rerank(rows, current) {
+  const updated = rows.map((r) => {
+    const rating = current[r.name.toLowerCase()] ?? r.rating;
+    const diff = rating - r.rating;
+    // Variação desde a lista (até 2 h atrás) até agora.
+    return { ...r, rating, delta: diff > 0 ? `+${diff}` : diff < 0 ? String(diff) : "" };
+  });
+  updated.sort((a, b) => b.rating - a.rating);
+  updated.forEach((r, i) => {
+    r.rank = i > 0 && r.rating === updated[i - 1].rating ? updated[i - 1].rank : i + 1;
+  });
+  return updated;
+}
+
+/** Rating de blitz atual de até 300 contas por consulta (POST /api/users, sem token). */
+export async function currentBlitz(names) {
+  const out = {};
+  for (let i = 0; i < names.length; i += 300) {
+    const response = await fetch(`${API}/api/users`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", Accept: "application/json" },
+      body: names.slice(i, i + 300).join(","),
+    });
+    if (!response.ok) throw new Error(`Lichess respondeu ${response.status}`);
+    for (const user of await response.json()) {
+      const blitz = user.perfs?.blitz;
+      if (blitz && !blitz.prov) out[user.id] = blitz.rating;
+    }
+  }
+  return out;
+}
+
 /** O topo e a vizinhança de `name` (sem repetir linhas), com `me` marcado. */
 export function windowAround(rows, name, { top = 3, around = 3 } = {}) {
   const at = rows.findIndex((r) => r.name.toLowerCase() === name.toLowerCase());
