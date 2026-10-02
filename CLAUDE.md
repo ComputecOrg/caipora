@@ -94,6 +94,8 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   permissões, variável de ambiente da Vercel); em 02/10/2026 funcionaram sem ele na Vercel (de casa
   a lista dava 404). Se voltarem a dar 404, cadastrar o token. Nunca usar o token do bot.
 - A pontuação de força do gráfico vem de `site/public/data/strength.json`: atualizar a cada versão.
+- Página Sobre (`site/public/about.html`, PT e EN no mesmo arquivo): os números (força, dias,
+  marcos) são texto fixo, atualizar junto com o `strength.json` a cada versão.
 
 ## Arquitetura (não mudar sem ruling)
 - Casas em LERF (a1 = 0, h8 = 63). Bitboards por tipo e por cor + mailbox de 64 casas.
