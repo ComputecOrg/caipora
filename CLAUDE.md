@@ -49,6 +49,13 @@ release). O CI (só Linux) roda ainda: suítes de perft, **assinatura do bench**
 `Bench: N` nas mensagens de commit tem de bater com `caipora bench`) e 16 partidas curtas de
 fastchess num build de debug (falha em terminação anormal, lance ilegal ou travamento).
 
+Cobertura (fora do CI, sem piso): no WSL, `cargo llvm-cov --no-fail-fast --ignore-run-fail
+--summary-only` numa cópia só dos arquivos versionados (`git ls-files`); os dois testes de tempo
+de `tests/uci_process.rs` estouram o limite com a instrumentação e não indicam bug. Site:
+`node --test --experimental-test-coverage --test-coverage-exclude='**/chess.js'
+--test-coverage-exclude='test/**' test/*.test.js`. Em 02/10/2026: motor 95,2% das linhas, site
+85,5%; os números aparecem na página Sobre.
+
 ## Bench
 - `cargo run --release -- bench` (profundidade padrão 12, 48 posições fixas). Todo commit que muda
   o que a busca faz termina com `Bench: <nós>`; os que não mudam, com `No functional change`.
@@ -94,6 +101,8 @@ fastchess num build de debug (falha em terminação anormal, lance ilegal ou tra
   permissões, variável de ambiente da Vercel); em 02/10/2026 funcionaram sem ele na Vercel (de casa
   a lista dava 404). Se voltarem a dar 404, cadastrar o token. Nunca usar o token do bot.
 - A pontuação de força do gráfico vem de `site/public/data/strength.json`: atualizar a cada versão.
+- Página Sobre (`site/public/about.html`, PT e EN no mesmo arquivo): os números (força, dias,
+  marcos) são texto fixo, atualizar junto com o `strength.json` a cada versão.
 
 ## Arquitetura (não mudar sem ruling)
 - Casas em LERF (a1 = 0, h8 = 63). Bitboards por tipo e por cor + mailbox de 64 casas.
