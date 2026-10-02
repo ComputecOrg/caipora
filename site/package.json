@@ -1,0 +1,18 @@
+{
+  "name": "caipora-site",
+  "private": true,
+  "type": "module",
+  "description": "Caipora Live: the caiporaBot games live with browser analysis, bot ranking and strength history",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "chessground": "9.2.1",
+    "stockfish": "19.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}
