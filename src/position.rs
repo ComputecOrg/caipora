@@ -115,6 +115,8 @@ pub struct Position {
     hash: u64,
     /// Hash Zobrist só dos peões (estrutura de peões), para tabelas indexadas por ela.
     pawn_hash: u64,
+    /// Hash Zobrist das peças (tudo menos peões, rei incluído) de cada cor.
+    non_pawn_hash: [u64; 2],
 }
 
 impl Position {
@@ -151,6 +153,7 @@ impl Position {
         pos.fullmove_number = parse_counter(fields.get(5), 1)?;
         pos.hash = pos.compute_hash();
         pos.pawn_hash = pos.compute_pawn_hash();
+        pos.non_pawn_hash = Color::ALL.map(|color| pos.compute_non_pawn_hash(color));
         Ok(pos)
     }
 
@@ -216,6 +219,7 @@ impl Position {
             fullmove_number: 1,
             hash: 0,
             pawn_hash: 0,
+            non_pawn_hash: [0; 2],
         }
     }
 
@@ -227,6 +231,8 @@ impl Position {
         self.hash ^= KEYS.piece(piece, square);
         if piece.kind == PieceType::Pawn {
             self.pawn_hash ^= KEYS.piece(piece, square);
+        } else {
+            self.non_pawn_hash[piece.color.index()] ^= KEYS.piece(piece, square);
         }
     }
 
@@ -494,6 +500,22 @@ impl Position {
         hash
     }
 
+    /// Hash das peças de `color` (menos peões) mantido de forma incremental.
+    pub fn non_pawn_hash(&self, color: Color) -> u64 {
+        self.non_pawn_hash[color.index()]
+    }
+
+    /// Hash das peças de `color` (menos peões) calculado do zero.
+    pub fn compute_non_pawn_hash(&self, color: Color) -> u64 {
+        let mut hash = 0;
+        for square in (self.colors[color.index()] & !self.pieces[PieceType::Pawn.index()]).squares()
+        {
+            let piece = self.mailbox[square.index()].expect("bitboard e mailbox coerentes");
+            hash ^= KEYS.piece(piece, square);
+        }
+        hash
+    }
+
     /// Peças de qualquer cor que atacam `square`, com os deslizantes bloqueados por `occupied`.
     pub fn attackers_to(&self, square: Square, occupied: Bitboard) -> Bitboard {
         let diagonal =
@@ -645,6 +667,8 @@ impl Position {
         self.hash ^= KEYS.piece(piece, square);
         if piece.kind == PieceType::Pawn {
             self.pawn_hash ^= KEYS.piece(piece, square);
+        } else {
+            self.non_pawn_hash[piece.color.index()] ^= KEYS.piece(piece, square);
         }
         piece
     }
@@ -961,6 +985,35 @@ mod tests {
     }
 
     #[test]
+    fn non_pawn_hash_depends_only_on_that_colors_pieces() {
+        let a = Position::from_fen("r3k3/pp6/8/8/8/2N5/5PPP/4K2R w K - 0 1").unwrap();
+        // Mesmas peças brancas (fora peões), outros peões, outras peças pretas e outro lado.
+        let b = Position::from_fen("4k3/8/2q5/8/4P3/2N5/8/4K2R b - - 0 1").unwrap();
+        assert_eq!(a.non_pawn_hash(Color::White), b.non_pawn_hash(Color::White));
+        assert_ne!(a.non_pawn_hash(Color::Black), b.non_pawn_hash(Color::Black));
+        // A mesma peça na mesma casa, mas da outra cor, conta só no hash daquela cor.
+        let c = Position::from_fen("r3k3/pp6/8/8/8/2n5/5PPP/4K2R w - - 0 1").unwrap();
+        assert_ne!(a.non_pawn_hash(Color::White), c.non_pawn_hash(Color::White));
+        assert_ne!(a.non_pawn_hash(Color::Black), c.non_pawn_hash(Color::Black));
+        // Lance de peão não mexe; lance de peça mexe só no hash de quem jogou.
+        let pos = Position::startpos();
+        let pawn_move = play(&pos, "e2e4");
+        assert_eq!(
+            pawn_move.non_pawn_hash(Color::White),
+            pos.non_pawn_hash(Color::White)
+        );
+        let knight_move = play(&pos, "g1f3");
+        assert_ne!(
+            knight_move.non_pawn_hash(Color::White),
+            pos.non_pawn_hash(Color::White)
+        );
+        assert_eq!(
+            knight_move.non_pawn_hash(Color::Black),
+            pos.non_pawn_hash(Color::Black)
+        );
+    }
+
+    #[test]
     fn non_pawn_material_detection() {
         let pawns_only = Position::from_fen("4k3/pppp4/8/8/8/8/4PPPP/4K3 w - - 0 1").unwrap();
         assert!(!pawns_only.has_non_pawn_material(Color::White));
@@ -1005,6 +1058,14 @@ mod tests {
                     );
                     assert!(pos.is_consistent(), "{}", pos.to_fen());
                     assert_eq!(pos.pawn_hash(), pos.compute_pawn_hash(), "{}", pos.to_fen());
+                    for color in Color::ALL {
+                        assert_eq!(
+                            pos.non_pawn_hash(color),
+                            pos.compute_non_pawn_hash(color),
+                            "{}",
+                            pos.to_fen()
+                        );
+                    }
                     let reparsed = Position::from_fen(&pos.to_fen()).unwrap();
                     assert_eq!(reparsed, pos, "FEN não reconstrói a posição");
                 }

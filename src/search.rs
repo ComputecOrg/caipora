@@ -174,48 +174,141 @@ impl QuietOrdering<'_> {
     }
 }
 
-/// Entradas por cor da tabela de correção (potência de 2).
+/// Entradas por cor das tabelas de correção indexadas por hash (potência de 2).
 const CORRECTION_SIZE: usize = 16_384;
 /// As entradas guardam centipeões multiplicados por isto, para a média móvel não perder precisão.
 const CORRECTION_GRAIN: i32 = 256;
-/// Maior correção aplicada, em centipeões.
+/// Maior correção aplicada por uma tabela, em centipeões.
 const CORRECTION_MAX: i32 = 100;
+/// Entradas por cor da correção de continuação: cobre todo par (lance do adversário, nosso lance
+/// antes dele), ver `continuation_key`.
+const CONTINUATION_CORRECTION_SIZE: usize = 1 << 18;
+/// Peso de cada tabela na correção final, em `1/CORRECTION_WEIGHT_SCALE`. A soma passa um pouco
+/// de 1: as tabelas enxergam partes diferentes da posição e raramente concordam por inteiro.
+const CORRECTION_WEIGHT_SCALE: i32 = 128;
+const CORRECTION_WEIGHT_PAWN: i32 = 56;
+const CORRECTION_WEIGHT_NON_PAWN: i32 = 36;
+const CORRECTION_WEIGHT_CONTINUATION: i32 = 40;
 
-/// Correção da avaliação estática pela estrutura de peões: média móvel da diferença entre o que a
-/// busca achou e o que a avaliação dizia, em posições com os mesmos peões. Conserta, aos poucos,
-/// o que a avaliação erra de forma sistemática naquele tipo de posição.
+/// Média móvel, por lado a jogar e por chave, da diferença entre o que a busca achou e o que a
+/// avaliação dizia. Conserta, aos poucos, o que a avaliação erra de forma sistemática naquele
+/// tipo de posição.
 struct CorrectionHistory {
-    table: [[i32; CORRECTION_SIZE]; 2],
+    /// `entries` por cor, uma cor depois da outra.
+    table: Vec<i32>,
+    entries: usize,
 }
 
 impl CorrectionHistory {
-    fn new() -> Box<CorrectionHistory> {
-        Box::new(CorrectionHistory {
-            table: [[0; CORRECTION_SIZE]; 2],
-        })
+    /// `entries` por cor, potência de 2.
+    fn new(entries: usize) -> CorrectionHistory {
+        debug_assert!(entries.is_power_of_two());
+        CorrectionHistory {
+            table: vec![0; 2 * entries],
+            entries,
+        }
     }
 
-    fn index(pawn_hash: u64) -> usize {
-        pawn_hash as usize & (CORRECTION_SIZE - 1)
+    fn index(&self, color: Color, key: u64) -> usize {
+        color.index() * self.entries + (key as usize & (self.entries - 1))
     }
 
-    /// Correção, em centipeões, para o lado `color` a jogar.
-    fn get(&self, color: Color, pawn_hash: u64) -> i32 {
-        self.table[color.index()][Self::index(pawn_hash)] / CORRECTION_GRAIN
+    /// Correção, em centipeões vezes `CORRECTION_GRAIN`, para o lado `color` a jogar.
+    fn raw(&self, color: Color, key: u64) -> i32 {
+        self.table[self.index(color, key)]
+    }
+
+    /// Correção, em centipeões, para o lado `color` a jogar (a busca usa a soma de `Corrections`).
+    #[cfg(test)]
+    fn get(&self, color: Color, key: u64) -> i32 {
+        self.raw(color, key) / CORRECTION_GRAIN
     }
 
     /// Puxa a entrada na direção de `error` (busca menos avaliação crua); buscas mais fundas
     /// pesam mais.
-    fn update(&mut self, color: Color, pawn_hash: u64, error: i32, depth: i32) {
+    fn update(&mut self, color: Color, key: u64, error: i32, depth: i32) {
         let weight = (depth + 1).clamp(1, 16);
         let limit = CORRECTION_MAX * CORRECTION_GRAIN;
         let target = (error * CORRECTION_GRAIN).clamp(-limit, limit);
-        let entry = &mut self.table[color.index()][Self::index(pawn_hash)];
+        let index = self.index(color, key);
+        let entry = &mut self.table[index];
         *entry += (target - *entry) * weight / 256;
     }
 
     fn clear(&mut self) {
-        self.table = [[0; CORRECTION_SIZE]; 2];
+        self.table.fill(0);
+    }
+}
+
+/// As chaves de um nó em cada tabela de correção.
+#[derive(Clone, Copy, Debug)]
+struct CorrectionKeys {
+    pawn: u64,
+    /// Peças (menos peões) de cada cor, indexado pela cor.
+    non_pawn: [u64; 2],
+    /// `None` quando o nó não veio de um lance de peça (raiz, lance nulo).
+    continuation: Option<usize>,
+}
+
+/// Chave da correção de continuação: o lance do adversário que levou ao nó e o nosso antes dele.
+/// A cor de cada um já é implícita (o primeiro é sempre do adversário), então só peça e destino
+/// entram; sem lance do adversário não há chave.
+fn continuation_key(previous: [Option<PieceTo>; 2]) -> Option<usize> {
+    const PIECE_TO: usize = 6 * 64;
+    let theirs = previous[0]?.index() % PIECE_TO;
+    let ours = previous[1].map_or(PIECE_TO, |mv| mv.index() % PIECE_TO);
+    Some(theirs * (PIECE_TO + 1) + ours)
+}
+
+/// Correções da avaliação estática pela estrutura de peões, pelas peças de cada cor e pelos dois
+/// últimos lances, somadas com pesos.
+struct Corrections {
+    pawn: CorrectionHistory,
+    non_pawn: [CorrectionHistory; 2],
+    continuation: CorrectionHistory,
+}
+
+impl Corrections {
+    fn new() -> Box<Corrections> {
+        Box::new(Corrections {
+            pawn: CorrectionHistory::new(CORRECTION_SIZE),
+            non_pawn: [
+                CorrectionHistory::new(CORRECTION_SIZE),
+                CorrectionHistory::new(CORRECTION_SIZE),
+            ],
+            continuation: CorrectionHistory::new(CONTINUATION_CORRECTION_SIZE),
+        })
+    }
+
+    /// Correção total, em centipeões, para o lado `color` a jogar.
+    fn get(&self, color: Color, keys: &CorrectionKeys) -> i32 {
+        let mut sum = CORRECTION_WEIGHT_PAWN * self.pawn.raw(color, keys.pawn);
+        for (table, key) in self.non_pawn.iter().zip(keys.non_pawn) {
+            sum += CORRECTION_WEIGHT_NON_PAWN * table.raw(color, key);
+        }
+        if let Some(key) = keys.continuation {
+            sum += CORRECTION_WEIGHT_CONTINUATION * self.continuation.raw(color, key as u64);
+        }
+        sum / (CORRECTION_WEIGHT_SCALE * CORRECTION_GRAIN)
+    }
+
+    /// Cada tabela aprende o erro inteiro; os pesos só entram na hora de aplicar.
+    fn update(&mut self, color: Color, keys: &CorrectionKeys, error: i32, depth: i32) {
+        self.pawn.update(color, keys.pawn, error, depth);
+        for (table, key) in self.non_pawn.iter_mut().zip(keys.non_pawn) {
+            table.update(color, key, error, depth);
+        }
+        if let Some(key) = keys.continuation {
+            self.continuation.update(color, key as u64, error, depth);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pawn.clear();
+        for table in &mut self.non_pawn {
+            table.clear();
+        }
+        self.continuation.clear();
     }
 }
 
@@ -252,7 +345,7 @@ static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
 struct ThreadTables {
     history: Box<History>,
     continuation: Box<ContinuationHistory>,
-    correction: Box<CorrectionHistory>,
+    correction: Box<Corrections>,
 }
 
 impl ThreadTables {
@@ -260,7 +353,7 @@ impl ThreadTables {
         ThreadTables {
             history: History::new(),
             continuation: ContinuationHistory::new(),
-            correction: CorrectionHistory::new(),
+            correction: Corrections::new(),
         }
     }
 
@@ -531,7 +624,7 @@ struct SearchState<'a> {
     tt: &'a TranspositionTable,
     history: &'a mut History,
     continuation: &'a mut ContinuationHistory,
-    correction: &'a mut CorrectionHistory,
+    correction: &'a mut Corrections,
     /// Até dois lances quietos que causaram corte em cada nível.
     killers: Vec<[Option<Move>; 2]>,
     /// Avaliação estática de cada nível do caminho atual (`-INFINITY` quando em xeque).
@@ -721,7 +814,7 @@ impl SearchState<'_> {
         let static_eval = if in_check {
             -INFINITY
         } else {
-            self.corrected_eval(pos, raw_eval)
+            self.corrected_eval(pos, raw_eval, ply)
         };
         self.evals[ply] = static_eval;
         // A posição melhorou em relação à nossa vez anterior? Se sim, podar é mais seguro.
@@ -939,8 +1032,9 @@ impl SearchState<'_> {
         };
         let quiet_best = best_move.is_none_or(|mv| !is_tactical(pos, mv));
         if !in_check && quiet_best && correction_applies(bound, best_score, static_eval) {
+            let keys = self.correction_keys(pos, ply);
             self.correction
-                .update(us, pos.pawn_hash(), best_score - raw_eval, depth);
+                .update(us, &keys, best_score - raw_eval, depth);
         }
         self.tt.store(
             pos.hash(),
@@ -982,7 +1076,7 @@ impl SearchState<'_> {
         let mut best_score = if in_check {
             -INFINITY
         } else {
-            let stand_pat = self.corrected_eval(pos, self.raw_eval(pos, ply));
+            let stand_pat = self.corrected_eval(pos, self.raw_eval(pos, ply), ply);
             if stand_pat >= beta {
                 return stand_pat;
             }
@@ -1011,6 +1105,10 @@ impl SearchState<'_> {
                 continue;
             }
             legal += 1;
+            // A correção de continuação dos nós abaixo lê o lance deste nível.
+            self.moved[ply] = pos
+                .piece_at(mv.from())
+                .map(|piece| PieceTo { piece, to: mv.to() });
             self.push_move(pos, mv, ply);
             let score = -self.quiescence(&next, -beta, -alpha, ply + 1);
             if self.stopped {
@@ -1079,10 +1177,19 @@ impl SearchState<'_> {
         }
     }
 
-    /// Avaliação `raw` somada à correção da estrutura de peões, longe das pontuações de mate.
-    fn corrected_eval(&self, pos: &Position, raw: i32) -> i32 {
-        let correction = self.correction.get(pos.side_to_move(), pos.pawn_hash());
+    /// Avaliação `raw` somada às correções, longe das pontuações de mate.
+    fn corrected_eval(&self, pos: &Position, raw: i32, ply: usize) -> i32 {
+        let keys = self.correction_keys(pos, ply);
+        let correction = self.correction.get(pos.side_to_move(), &keys);
         (raw + correction).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+    }
+
+    fn correction_keys(&self, pos: &Position, ply: usize) -> CorrectionKeys {
+        CorrectionKeys {
+            pawn: pos.pawn_hash(),
+            non_pawn: Color::ALL.map(|color| pos.non_pawn_hash(color)),
+            continuation: continuation_key(self.previous_moves(ply)),
+        }
     }
 
     /// Lance quieto que causou corte: bônus no histórico, punição para os quietos que falharam
@@ -1553,7 +1660,7 @@ mod tests {
 
     #[test]
     fn correction_follows_the_search_error_and_stays_bounded() {
-        let mut correction = CorrectionHistory::new();
+        let mut correction = CorrectionHistory::new(CORRECTION_SIZE);
         let pawns = 0x1234_5678_9ABC_DEF0;
         assert_eq!(correction.get(Color::White, pawns), 0);
         correction.update(Color::White, pawns, 40, 8);
@@ -1582,11 +1689,80 @@ mod tests {
 
     #[test]
     fn deeper_searches_move_the_correction_more() {
-        let mut shallow = CorrectionHistory::new();
-        let mut deep = CorrectionHistory::new();
+        let mut shallow = CorrectionHistory::new(CORRECTION_SIZE);
+        let mut deep = CorrectionHistory::new(CORRECTION_SIZE);
         shallow.update(Color::White, 7, 100, 1);
         deep.update(Color::White, 7, 100, 10);
         assert!(deep.get(Color::White, 7) > shallow.get(Color::White, 7));
+    }
+
+    #[test]
+    fn corrections_add_each_table_with_its_weight() {
+        let mut corrections = Corrections::new();
+        let keys = CorrectionKeys {
+            pawn: 11,
+            non_pawn: [22, 33],
+            continuation: Some(44),
+        };
+        assert_eq!(corrections.get(Color::White, &keys), 0);
+        for _ in 0..300 {
+            corrections.update(Color::White, &keys, 64, 15);
+        }
+        let near = |value: i32, expected: i32| (value - expected).abs() <= 2;
+        let all = corrections.get(Color::White, &keys);
+        let total = CORRECTION_WEIGHT_PAWN
+            + 2 * CORRECTION_WEIGHT_NON_PAWN
+            + CORRECTION_WEIGHT_CONTINUATION;
+        assert!(near(all, 64 * total / CORRECTION_WEIGHT_SCALE), "{all}");
+        // Cada tabela só responde à sua chave: trocar uma tira só a parte dela.
+        let other_pawns = CorrectionKeys { pawn: 12, ..keys };
+        let without_pawns = corrections.get(Color::White, &other_pawns);
+        let pawn_part = 64 * CORRECTION_WEIGHT_PAWN / CORRECTION_WEIGHT_SCALE;
+        assert!(near(all - without_pawns, pawn_part), "{without_pawns}");
+        let other_white = CorrectionKeys {
+            non_pawn: [23, 33],
+            ..keys
+        };
+        let non_pawn_part = 64 * CORRECTION_WEIGHT_NON_PAWN / CORRECTION_WEIGHT_SCALE;
+        let without_white = corrections.get(Color::White, &other_white);
+        assert!(near(all - without_white, non_pawn_part), "{without_white}");
+        // Sem lance anterior (raiz, lance nulo) a continuação não entra.
+        let no_previous = CorrectionKeys {
+            continuation: None,
+            ..keys
+        };
+        let continuation_part = 64 * CORRECTION_WEIGHT_CONTINUATION / CORRECTION_WEIGHT_SCALE;
+        let without_continuation = corrections.get(Color::White, &no_previous);
+        assert!(
+            near(all - without_continuation, continuation_part),
+            "{without_continuation}"
+        );
+        // Atualizar sem continuação não toca na tabela de continuação.
+        let mut fresh = Corrections::new();
+        fresh.update(Color::White, &no_previous, 64, 15);
+        assert_eq!(fresh.continuation.get(Color::White, 44), 0);
+        assert_eq!(corrections.get(Color::Black, &keys), 0);
+    }
+
+    #[test]
+    fn continuation_key_tells_the_previous_moves_apart() {
+        let knight = piece_to("N", "f3");
+        let bishop = piece_to("B", "f3");
+        let reply = piece_to("n", "c6");
+        assert_eq!(continuation_key([None, Some(knight)]), None);
+        let keys = [
+            continuation_key([Some(reply), Some(knight)]),
+            continuation_key([Some(reply), Some(bishop)]),
+            continuation_key([Some(reply), None]),
+            continuation_key([Some(piece_to("n", "f6")), Some(knight)]),
+        ];
+        for (i, a) in keys.iter().enumerate() {
+            let a = a.expect("há lance anterior");
+            assert!(a < CONTINUATION_CORRECTION_SIZE);
+            for b in &keys[i + 1..] {
+                assert_ne!(Some(a), *b);
+            }
+        }
     }
 
     #[test]
