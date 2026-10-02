@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::eval::evaluate;
 use crate::movegen::{generate_legal, generate_pseudo_legal};
 use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
-use crate::nnue::{Accumulators, Network};
+use crate::nnue::{Accumulators, Network, RefreshCache};
 use crate::position::Position;
 use crate::see::see;
 use crate::timeman::{Limits, iteration_time_scale, should_start_iteration_scaled};
@@ -499,6 +499,7 @@ fn new_state<'a>(
         accumulators: network.map_or_else(Vec::new, |net| {
             vec![Accumulators::new(net, root); MAX_PLY + 2]
         }),
+        refresh_cache: network.map(RefreshCache::new),
         network,
         tt,
         history: &mut tables.history,
@@ -567,6 +568,8 @@ struct SearchState<'a> {
     network: Option<&'a Network>,
     /// `accumulators[ply]`: camada oculta da rede na posição desse nível (vazio sem rede).
     accumulators: Vec<Accumulators>,
+    /// Cache de recálculo da rede para quando um rei troca de bucket (vazio sem rede).
+    refresh_cache: Option<RefreshCache>,
 }
 
 impl SearchState<'_> {
@@ -862,7 +865,7 @@ impl SearchState<'_> {
             self.moved[ply] = pos
                 .piece_at(mv.from())
                 .map(|piece| PieceTo { piece, to: mv.to() });
-            self.push_move(pos, mv, ply);
+            self.push_move(pos, &next, mv, ply);
             let score = if legal == 1 {
                 -self.negamax(&next, new_depth, -beta, -alpha, ply + 1, pv_node)
             } else {
@@ -1011,7 +1014,7 @@ impl SearchState<'_> {
                 continue;
             }
             legal += 1;
-            self.push_move(pos, mv, ply);
+            self.push_move(pos, &next, mv, ply);
             let score = -self.quiescence(&next, -beta, -alpha, ply + 1);
             if self.stopped {
                 return 0;
@@ -1065,10 +1068,11 @@ impl SearchState<'_> {
         score.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
     }
 
-    /// Prepara a camada oculta do nível seguinte para o lance `mv`.
-    fn push_move(&mut self, pos: &Position, mv: Move, ply: usize) {
-        if let Some(net) = self.network {
-            self.accumulators[ply + 1] = self.accumulators[ply].after_move(net, pos, mv);
+    /// Prepara a camada oculta do nível seguinte, `next`, para o lance `mv`.
+    fn push_move(&mut self, pos: &Position, next: &Position, mv: Move, ply: usize) {
+        if let (Some(net), Some(cache)) = (self.network, self.refresh_cache.as_mut()) {
+            let (done, rest) = self.accumulators.split_at_mut(ply + 1);
+            done[ply].after_move(&mut rest[0], net, pos, next, mv, cache);
         }
     }
 
