@@ -1,6 +1,6 @@
 [package]
 name = "caipora"
-version = "3.6.0"
+version = "3.7.0"
 edition = "2024"
 rust-version = "1.98"
 license = "GPL-3.0-or-later"
@@ -8,6 +8,10 @@ description = "Caipora, a UCI chess engine"
 publish = false
 
 [dependencies]
+
+[features]
+# Parâmetros da busca como opções UCI, para o SPSA (src/tune.rs). Nunca no build que joga.
+tune = []
 
 [lints.rust]
 unsafe_code = "deny"
