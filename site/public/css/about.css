@@ -1,0 +1,36 @@
+/* Página Sobre: texto longo, coluna estreita, mesma paleta do site. */
+.lang { display: flex; gap: 4px; padding: 3px; border: 1px solid #34312c; border-radius: 8px; }
+.lang button { background: none; border: 0; border-radius: 6px; color: var(--dim); font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; cursor: pointer; }
+.lang button[aria-pressed="true"] { background: #2a2823; color: var(--strong); }
+
+.about { max-width: 880px; margin: 0 auto; padding: 56px 32px 64px; display: flex; flex-direction: column; gap: 48px; font-size: 16px; line-height: 1.65; }
+.about section { display: flex; flex-direction: column; gap: 14px; }
+.about h1 { margin: 0; font-size: 40px; line-height: 1.15; color: var(--strong); font-weight: 600; }
+.about h2 { margin: 0; font-size: 24px; color: var(--strong); font-weight: 600; }
+.about p { margin: 0; }
+.about b { color: var(--strong); }
+.kicker { font-size: 13px; letter-spacing: .06em; color: var(--dim); }
+.lead { font-size: 18px; color: #c9c5bc; }
+.sign { color: var(--dim); font-style: italic; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding-top: 8px; }
+.stat { padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--dim); line-height: 1.35; }
+.stat .num { font-family: var(--mono); font-size: 24px; color: var(--strong); }
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; font-size: 14px; line-height: 1.55; }
+.card-t { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
+.timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 15px; }
+.timeline li { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 16px; }
+.timeline li span:first-child { color: var(--dim); font-family: var(--mono); font-size: 13px; padding-top: 2px; }
+.ctas { flex-direction: row !important; flex-wrap: wrap; gap: 12px !important; }
+.ctas a { padding: 10px 16px; border-radius: 8px; border: 1px solid #34312c; }
+.ctas a.primary { background: #2c3a2a; border-color: #3d5139; color: var(--strong); }
+
+@media (max-width: 860px) {
+  .about { padding: 32px 16px 40px; gap: 36px; font-size: 15px; }
+  .about h1 { font-size: 28px; }
+  .lead { font-size: 16px; }
+  .stats, .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .timeline li { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; }
+}
+@media (max-width: 420px) {
+  .cards { grid-template-columns: minmax(0, 1fr); }
+}

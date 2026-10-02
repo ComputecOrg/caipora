@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sobre o Caipora · About Caipora</title>
+<meta name="description" content="Caipora: a chess engine built from scratch in Brazil in seven days, written by Claude under the direction of Matheus de Carvalho Jesus, with tests, CI and every change measured.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Caipora: from an empty repository to near the world's top 70 chess engines in seven days">
+<meta property="og:description" content="An original chess engine from Brazil, written by Claude (Anthropic) under the direction of Matheus de Carvalho Jesus. Tests first, continuous integration, and no change accepted without proof over thousands of games.">
+<meta property="og:url" content="https://caipora-live.vercel.app/about.html">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="stylesheet" crossorigin href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/site.css">
+<link rel="stylesheet" href="css/about.css">
+<script type="module" src="js/about.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <a class="name" href="./">Caipora</a>
+    <nav class="tabs" aria-label="Sections">
+      <a href="./" data-pt="Ao vivo" data-en="Live">Live</a>
+      <a href="about.html" aria-current="page" data-pt="Sobre" data-en="About">About</a>
+    </nav>
+  </div>
+  <div class="lang" role="group" aria-label="Language">
+    <button type="button" data-lang="pt">PT</button>
+    <button type="button" data-lang="en">EN</button>
+  </div>
+</header>
+
+<!-- ===================== PORTUGUÊS ===================== -->
+<main class="about" lang="pt-BR" data-lang-block="pt" hidden>
+  <section class="hero">
+    <span class="kicker">UM MOTOR DE XADREZ BRASILEIRO</span>
+    <h1>De zero a perto dos 70 motores de xadrez mais fortes do mundo, em sete dias.</h1>
+    <p class="lead">O Caipora é um motor de xadrez original, criado do zero no Brasil a partir de 26 de setembro de 2026. O código foi escrito pelo Claude, a inteligência artificial da Anthropic, sob a direção de Matheus de Carvalho Jesus, que decidiu o que tentar, revisou e testou cada passo.</p>
+    <div class="stats">
+      <div class="stat"><span class="num">~3603</span><span>força estimada (escala CCRL)</span></div>
+      <div class="stat"><span class="num">7 dias</span><span>do repositório vazio até aqui</span></div>
+      <div class="stat"><span class="num" data-live="blitz">2892</span><span>rating blitz no Lichess</span></div>
+      <div class="stat"><span class="num">1º</span><span>motor brasileiro (estimativa, à frente do Tucano)</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Por que eu criei o Caipora</h2>
+    <p>Eu nunca tinha escrito um motor de xadrez. Nunca tinha programado em Rust, não sabia o que era uma rede neural de avaliação e não fazia ideia de como se mede a força de um programa de xadrez. Foi exatamente por isso que comecei.</p>
+    <p>Eu queria responder uma pergunta: até onde uma pessoa consegue chegar nesta nova era da programação, usando IA do jeito certo? Não pedindo código e torcendo para funcionar, mas tratando o Claude como um engenheiro do time: testes escritos antes do código, integração contínua barrando qualquer regressão, e nenhuma ideia aceita sem antes provar, em milhares de partidas, que deixava o motor mais forte.</p>
+    <p>Em sete dias, o Caipora saiu de um repositório vazio para perto dos 70 motores mais fortes do mundo e, pelas nossas medições, passou o motor brasileiro mais forte. O meu trabalho não foi digitar código. Foi decidir o que tentar, exigir prova antes de aceitar e não deixar o projeto se enganar com números bonitos. Acredito que é isso que muda agora: quem sabe fazer as perguntas certas e não abre mão do rigor consegue construir, sozinho e em dias, o que antes pedia uma equipe e anos.</p>
+    <p class="sign">— Matheus de Carvalho Jesus</p>
+  </section>
+
+  <section>
+    <h2>Para quem não é do xadrez</h2>
+    <p>Um motor de xadrez é um programa que joga xadrez. Ele olha a posição, imagina milhões de continuações por segundo e escolhe o lance que leva ao melhor resultado. Os melhores do mundo, como o Stockfish, jogam muito acima de qualquer ser humano: o campeão mundial teria chance quase nula contra eles.</p>
+    <p>O Caipora faz a mesma coisa com duas partes: uma <b>busca</b>, que decide quais continuações vale a pena olhar, e uma <b>rede neural</b>, que olha cada posição e diz quem está melhor. A rede aprendeu com bilhões de posições de partidas de computador. Ela não decorou lances: aprendeu a avaliar.</p>
+    <p>Ele joga sem parar no Lichess, um site aberto de xadrez, como <a href="https://lichess.org/@/caiporaBot">caiporaBot</a>. Na aba <a href="./">Ao vivo</a> dá para acompanhar as partidas, com uma análise que mostra, lance a lance, o que estava bom e o que foi erro.</p>
+  </section>
+
+  <section>
+    <h2>Como foi feito</h2>
+    <p>O Claude escreveu o código; uma pessoa dirigiu, decidiu e conferiu. A regra que fez a diferença foi simples: <b>nenhuma mudança entra sem provar que deixa o motor mais forte.</b> Cada ideia joga milhares de partidas contra a versão anterior, em computadores alugados na nuvem, e só fica se ganhar com confiança estatística. Ideias que não passam são descartadas e anotadas.</p>
+    <p>Tudo é aberto: o código, as decisões com o motivo de cada uma, e o uso de IA, declarado em cada commit. Nada foi copiado de outros motores.</p>
+  </section>
+
+  <section>
+    <h2>A visão técnica</h2>
+    <div class="cards">
+      <div class="card-t"><b>Motor</b><span>Rust, UCI, bitboards com magic, Chess960. Busca alfa-beta com PVS, janelas de aspiração, extensões singulares, null move, LMR com nó de corte, LMP, futility e SEE, quiescente com TT, históricos de quietos e capturas sensíveis a ameaças, correções de avaliação, Lazy SMP e ponder.</span></div>
+      <div class="card-t"><b>Rede neural (NNUE)</b><span>(768×8 king buckets → 1024)×2 → 8 output buckets, SCReLU, inferência int16. Treinada com bullet numa GTX 1660 em ~12 bilhões de posições de dados do Leela Chess Zero (ODbL). Seis gerações; as três primeiras com dados do próprio Caipora.</span></div>
+      <div class="card-t"><b>Medição</b><span>SPRT no relógio (8+0.08, limites [0, 5]) com fastchess em máquinas spot da AWS; cada pacote confirmado contra a versão anterior; força estimada por gauntlet de 600 partidas contra versões do Stash com rating CCRL conhecido.</span></div>
+      <div class="card-t"><b>Processo</b><span>TDD, CI com assinatura de bench em todo commit, registro de decisões com o custo de cada uma estar errada, infraestrutura de SPSA para ajuste fino. Bot no Lichess num servidor próprio; este site na Vercel, com o Stockfish rodando no navegador de quem visita.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Marcos</h2>
+    <ol class="timeline">
+      <li><span>26 set</span><span>Repositório criado; geração de lances validada por todas as suítes de perft. Primeira partida no Lichess.</span></li>
+      <li><span>27 set</span><span>Primeira rede neural; o bot passa a jogar valendo rating.</span></li>
+      <li><span>28 set</span><span>Rede treinada com dados do Leela Chess Zero: +237 de força num passo só.</span></li>
+      <li><span>1 out</span><span>Passa o Tucano pela estimativa; código aberto; primeira versão pública.</span></li>
+      <li><span>2 out</span><span>Uma noite de melhorias medidas: de ~3508 para ~3603.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>O que ainda não é verdade</h2>
+    <p>A força de ~3603 é uma estimativa nossa; o número oficial depende dos testadores da CCRL. E o topo do mundo (Stockfish, ~3790) ainda está longe: o próximo passo é a faixa dos 50 melhores.</p>
+  </section>
+
+  <section class="ctas">
+    <a class="primary" href="./">Assistir ao vivo</a>
+    <a href="https://github.com/ComputecOrg/caipora">Código no GitHub</a>
+    <a href="https://lichess.org/@/caiporaBot">caiporaBot no Lichess</a>
+    <a href="https://github.com/ComputecOrg/caipora/blob/main/AI_USAGE.md">Como a IA foi usada</a>
+  </section>
+</main>
+
+<!-- ===================== ENGLISH ===================== -->
+<main class="about" lang="en" data-lang-block="en" hidden>
+  <section class="hero">
+    <span class="kicker">A CHESS ENGINE FROM BRAZIL</span>
+    <h1>From nothing to near the world's 70 strongest chess engines, in seven days.</h1>
+    <p class="lead">Caipora is an original chess engine, built from scratch in Brazil starting on 26 September 2026. The code was written by Claude, Anthropic's AI, under the direction of Matheus de Carvalho Jesus, who decided what to try and reviewed and tested every step.</p>
+    <div class="stats">
+      <div class="stat"><span class="num">~3603</span><span>estimated strength (CCRL scale)</span></div>
+      <div class="stat"><span class="num">7 days</span><span>from an empty repository</span></div>
+      <div class="stat"><span class="num" data-live="blitz">2892</span><span>Lichess blitz rating</span></div>
+      <div class="stat"><span class="num">#1</span><span>Brazilian engine (estimate, ahead of Tucano)</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Why I built Caipora</h2>
+    <p>I had never written a chess engine. I had never programmed in Rust, didn't know what an evaluation neural network was, and had no idea how anyone measures the strength of a chess program. That is exactly why I started.</p>
+    <p>I wanted to answer one question: how far can one person go in this new era of programming, using AI the right way? Not asking for code and hoping it works, but treating Claude as an engineer on the team: tests written before the code, continuous integration blocking any regression, and no idea accepted until it had proven, over thousands of games, that it made the engine stronger.</p>
+    <p>In seven days, Caipora went from an empty repository to near the world's 70 strongest engines and, by our measurements, passed the strongest Brazilian engine. My job was not typing code. It was deciding what to try, demanding proof before accepting anything, and not letting the project fool itself with nice-looking numbers. I believe this is what changes now: whoever asks the right questions and refuses to give up on rigor can build, alone and in days, what used to take a team and years.</p>
+    <p class="sign">— Matheus de Carvalho Jesus</p>
+  </section>
+
+  <section>
+    <h2>If you don't play chess</h2>
+    <p>A chess engine is a program that plays chess. It looks at the position, imagines millions of continuations per second and picks the move that leads to the best result. The world's best, like Stockfish, play far above any human: the world champion would have almost no chance against them.</p>
+    <p>Caipora does the same with two parts: a <b>search</b>, which decides which continuations are worth looking at, and a <b>neural network</b>, which looks at each position and says who is better. The network learned from billions of positions from computer games. It did not memorise moves: it learned to evaluate.</p>
+    <p>It plays nonstop on Lichess, an open chess site, as <a href="https://lichess.org/@/caiporaBot">caiporaBot</a>. On the <a href="./">Live</a> tab you can follow its games, with an analysis that shows, move by move, what was good and what was a mistake.</p>
+  </section>
+
+  <section>
+    <h2>How it was built</h2>
+    <p>Claude wrote the code; a person directed, decided and checked. One simple rule made the difference: <b>no change gets in without proving it makes the engine stronger.</b> Every idea plays thousands of games against the previous version on rented cloud machines, and stays only if it wins with statistical confidence. Ideas that fail are dropped and written down.</p>
+    <p>Everything is open: the code, the decisions with the reason for each, and the use of AI, declared in every commit. Nothing was copied from other engines.</p>
+  </section>
+
+  <section>
+    <h2>The technical view</h2>
+    <div class="cards">
+      <div class="card-t"><b>Engine</b><span>Rust, UCI, magic bitboards, Chess960. Alpha-beta with PVS, aspiration windows, singular extensions, null move, LMR with cut-node tracking, LMP, futility and SEE pruning, quiescence with TT, threat-aware quiet and capture histories, evaluation corrections, Lazy SMP and pondering.</span></div>
+      <div class="card-t"><b>Neural network (NNUE)</b><span>(768×8 king buckets → 1024)×2 → 8 output buckets, SCReLU, int16 inference. Trained with bullet on a GTX 1660 on ~12 billion positions of Leela Chess Zero data (ODbL). Six generations; the first three on Caipora's own games.</span></div>
+      <div class="card-t"><b>Measurement</b><span>Clock SPRTs (8+0.08, bounds [0, 5]) with fastchess on AWS spot machines; every package confirmed against the previous version; strength estimated by a 600-game gauntlet against Stash versions with known CCRL ratings.</span></div>
+      <div class="card-t"><b>Process</b><span>TDD, CI with a bench signature on every commit, a decision log with the cost of each decision being wrong, SPSA infrastructure for fine tuning. The Lichess bot runs on its own server; this site runs on Vercel, with Stockfish running in the visitor's browser.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Milestones</h2>
+    <ol class="timeline">
+      <li><span>26 Sep</span><span>Repository created; move generation validated by every perft suite. First game on Lichess.</span></li>
+      <li><span>27 Sep</span><span>First neural network; the bot starts playing rated games.</span></li>
+      <li><span>28 Sep</span><span>A network trained on Leela Chess Zero data: +237 strength in a single step.</span></li>
+      <li><span>1 Oct</span><span>Passes Tucano by the estimate; source made public; first public release.</span></li>
+      <li><span>2 Oct</span><span>One night of measured improvements: from ~3508 to ~3603.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What is not true yet</h2>
+    <p>The ~3603 strength is our own estimate; the official number depends on the CCRL testers. And the very top (Stockfish, ~3790) is still far away: the next step is the top 50.</p>
+  </section>
+
+  <section class="ctas">
+    <a class="primary" href="./">Watch it live</a>
+    <a href="https://github.com/ComputecOrg/caipora">Code on GitHub</a>
+    <a href="https://lichess.org/@/caiporaBot">caiporaBot on Lichess</a>
+    <a href="https://github.com/ComputecOrg/caipora/blob/main/AI_USAGE.md">How AI was used</a>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>Caipora · GPL-3.0-or-later · <a href="https://github.com/ComputecOrg/caipora">github.com/ComputecOrg/caipora</a></span>
+</footer>
+</body>
+</html>
