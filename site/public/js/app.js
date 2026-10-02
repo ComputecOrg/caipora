@@ -8,6 +8,7 @@ import { nextJob, FILL_DEPTH } from "./lib/schedule.js";
 import { classifyMoves, accuracies, gameSummary, terminalEval, LABELS } from "./lib/review.js";
 import { NdjsonSplitter, movesFromStream, gameResult, formatDiff } from "./lib/stream.js";
 import { profileUrl } from "./lib/links.js";
+import { splitOpening } from "./lib/opening.js";
 import { Engine } from "./engine.js";
 
 const BOT = "caiporaBot";
@@ -30,6 +31,7 @@ const game = {
   result: null, // {winner: "white"|"black"|null, status} quando a partida acabou
   speed: "",
   tournament: null, // id do torneio da partida, se for de torneio
+  opening: null, // {eco, opening, variation} pelo nome que o Lichess dá
 };
 // Cartão de resumo do fim da partida: aberto sozinho quando a partida ao vivo acaba; "Close" fecha.
 let summaryOpen = false;
@@ -292,6 +294,33 @@ function playerLink(name, attrs = {}) {
   return url ? el("a", { ...attrs, href: url, target: "_blank", rel: "noopener", text: name }) : el("span", { ...attrs, text: name ?? "" });
 }
 
+// Abertura e defesa/variação no topo da lista de lances.
+function renderOpening() {
+  const box = $("opening");
+  const o = game.opening;
+  box.hidden = !o;
+  if (!o) return;
+  box.replaceChildren(
+    ...[o.eco ? el("span", { class: "eco", text: o.eco }) : null, el("b", { text: o.opening }), o.variation ? el("span", { text: ` · ${o.variation}` }) : null].filter(Boolean),
+  );
+}
+
+function setOpening(data) {
+  game.opening = splitOpening(data);
+  renderOpening();
+}
+
+// Durante a partida o Lichess refina o nome da abertura a cada lance de livro.
+async function refreshOpening() {
+  if (game.mode !== "live") return;
+  try {
+    const current = await getJson(`${LICHESS}/api/user/${BOT}/current-game`);
+    if (current.id === game.id && current.opening) setOpening(current.opening);
+  } catch {
+    // fica o nome anterior
+  }
+}
+
 function playerOf(p) {
   return p ? { name: p.user?.name ?? p.name ?? "Anonymous", rating: p.rating ?? null, title: p.user?.title ?? null } : null;
 }
@@ -324,6 +353,7 @@ async function watchLive() {
   if (reviewing || current.status !== "started" || game.mode === "live") return;
   summaryOpen = false;
   game.result = null;
+  setOpening(current.opening);
   game.tournament = current.arenaTour?.id ?? current.swissTour?.id ?? current.tournament ?? null;
   loadTournament(game.tournament);
   const white = playerOf(current.players.white);
@@ -377,6 +407,7 @@ async function streamGame(id, white, black) {
       data = await getJson(`${LICHESS}/game/export/${id}?moves=false`).catch(() => data);
     }
     game.result = gameResult(data);
+    if (data.opening) setOpening(data.opening);
   } catch {
     game.result = { winner: null, status: "unknown", ratingDiff: null };
   }
@@ -408,6 +439,7 @@ async function review(id) {
     el("a", { href: "#", text: "back to live", onclick: (e) => { e.preventDefault(); location.hash = ""; } }),
   );
   game.result = gameResult(data);
+  setOpening(data.opening);
   game.tournament = data.arenaTour?.id ?? data.swissTour?.id ?? data.tournament ?? null;
   loadTournament(game.tournament);
   summaryOpen = false;
@@ -716,4 +748,5 @@ setInterval(loadChips, 60000);
 setInterval(() => {
   setStatus();
   if (game.mode === "idle") watchLive();
+  else refreshOpening();
 }, 15000);

@@ -163,3 +163,8 @@ a:hover { color: #a9cdf0; }
 /* nome do jogador com link para o perfil: mesma cor do nome, sublinhado só ao passar o mouse */
 .player-link { color: inherit; }
 .player-link:hover { color: inherit; text-decoration: underline; }
+
+/* abertura da partida, no topo da lista de lances */
+.opening { margin: 6px 0 10px; font-size: 13px; line-height: 1.4; color: var(--dim); }
+.opening b { color: var(--strong); font-weight: 500; }
+.opening .eco { font-family: var(--mono); font-size: 12px; margin-right: 8px; padding: 1px 6px; border: 1px solid #34312c; border-radius: 4px; }
