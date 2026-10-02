@@ -2012,7 +2012,7 @@ mod tests {
             state.moved[0] = Some(piece_to("Q", "a1"));
             state.quiet_played[0] = quiet_parent.then_some(parent);
             state.threats[0] = Bitboard::EMPTY;
-            state.negamax(&pos, 2, alpha, alpha + 1, 1, false);
+            state.negamax(&pos, 2, alpha, alpha + 1, 1, false, false);
             state.history.get(Color::White, parent, Bitboard::EMPTY)
         };
         assert!(run(&mut searcher, true, 0) > 0);
