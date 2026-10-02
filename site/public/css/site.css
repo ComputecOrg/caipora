@@ -29,6 +29,10 @@ a:hover { color: #a9cdf0; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; padding: 14px 32px; border-bottom: 1px solid var(--line); background: #1d1b18; }
 .brand { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .name { font-size: 20px; font-weight: 600; color: var(--strong); }
+/* abas Ao vivo | Sobre, nas duas páginas */
+.tabs { display: flex; gap: 4px; margin-left: 16px; font-size: 14px; }
+.tabs a { padding: 6px 12px; border-radius: 6px; color: #b9b5ac; }
+.tabs a[aria-current="page"] { background: #2a2823; color: var(--strong); font-weight: 500; }
 .sub { font-size: 13px; color: var(--dim); }
 .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #b9b5ac; margin-left: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #5b5850; }
