@@ -56,6 +56,13 @@ de `tests/uci_process.rs` estouram o limite com a instrumentação e não indica
 --test-coverage-exclude='test/**' test/*.test.js`. Em 02/10/2026: motor 95,2% das linhas, site
 85,5%; os números aparecem na página Sobre.
 
+Release: além dos executáveis x86-64, todo release leva `caipora-<versão>-linux-aarch64-musl`
+(estático; roda em Linux ARM e Android; pedido do MCEC na issue #83). No WSL, a partir da tag:
+`RUSTFLAGS="-C target-cpu=generic -C linker=rust-lld -C target-feature=+crt-static" cargo build
+--release --target aarch64-unknown-linux-musl` (alvo via `rustup target add`). Conferir com
+`qemu-aarch64 <binário> bench` (pacote `qemu-user`): o bench tem de bater com o do x86. Atualizar
+o `SHA256SUMS.txt` no formato `<hash> *<arquivo>`.
+
 ## Bench
 - `cargo run --release -- bench` (profundidade padrão 12, 48 posições fixas). Todo commit que muda
   o que a busca faz termina com `Bench: <nós>`; os que não mudam, com `No functional change`.
