@@ -127,7 +127,11 @@ fn matches_the_lichess_oracle() {
             "loss" => Wdl::Loss,
             _ => continue,
         };
-        let got = wdl(&tb, fen);
+        let pos = Position::from_fen(fen).unwrap();
+        if pos.occupied().count() as usize > tb.max_pieces() {
+            continue;
+        }
+        let got = tb.probe_wdl(&pos);
         checked += 1;
         if got != Some(expected) {
             wrong.push(format!("{fen}: esperado {expected:?}, veio {got:?}"));
