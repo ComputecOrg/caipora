@@ -235,6 +235,11 @@
 - **Syzygy (D27):** leitura própria das tabelas WDL, opção `SyzygyPath`, desligada por padrão.
   SPRT a 8+0.08: +1,0 ± 1,8 em 31036 (inconclusivo). Medir num ritmo mais longo antes de ligar no
   bot; DTZ só se fizer falta.
+- **g7 com 1536 na oculta (reprovada, 06/10/2026):** mesmos dados e receita da g6, 80 blocos de
+  100 milhões (6 h 42 min na GTX 1660). SPRT contra a main (STC 8+0.08, [0, 5], AWS):
+  **−8,0 ± 5,8** em 4320 partidas (H0). A rede maior custa ~12% de nós/s (bench 763 mil contra
+  870 mil) e não paga isso. Rede e branch ficam só em casa (`nets/g7-1536-e*.nnue`,
+  `feat/g7-1536`). O próximo passo na rede não é crescer, é dado novo ou velocidade.
 
 - Mudança de busca: SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]), **com a rede nos dois
   lados**.
