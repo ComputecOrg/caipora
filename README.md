@@ -149,6 +149,7 @@ The build targets x86-64-v3 (AVX2). For an older CPU:
 | `Ponder` | false | |
 | `UCI_Chess960` | false | |
 | `EvalFile` | `<embedded>` | path to another network |
+| `SyzygyPath` | `<empty>` | folder(s) with Syzygy WDL tables (`.rtbw`), separated by `;` |
 | `Clear Hash` | | button |
 
 Extra commands: `bench [depth]`, `go perft N`, `d` (show the board), `eval`.

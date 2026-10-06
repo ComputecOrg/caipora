@@ -398,3 +398,30 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
 - **Custo se estiver errada:** um nível de indireção a mais para ler a busca; no build `tune` o LMR
   é calculado a cada lance (sem tabela), então ele é mais lento e nunca é o que joga. Valores
   ajustados só entram com SPRT (régua da D25).
+
+## D27 — 06/10/2026 — Tablebases Syzygy com leitura própria
+
+- **Decisão:** o Caipora lê tabelas Syzygy WDL (opção `SyzygyPath`) com código próprio em
+  `src/syzygy/`, sem crates nem código de terceiros (o dono recusou a biblioteca shakmaty-syzygy).
+  O formato veio de uma especificação em prosa, sem código (`docs/syzygy-spec.md`), escrita por um
+  agente separado que leu as implementações públicas para entender a ideia; a implementação foi
+  feita só a partir dela. A busca sonda a WDL logo após um lance que zera o contador dos 50 lances,
+  em nós com até o número de peças das tabelas, **só quando a raiz ainda não está nas tabelas**;
+  guarda o resultado na TT (vitória/derrota como limites, faixa entre `TB_BOUND` e os mates) e, em
+  nó PV sem corte, usa a vitória como piso e a derrota como teto. Sem `SyzygyPath` a busca é
+  idêntica (bench 5263766).
+- **Por quê:** os dados de 791 partidas do bot mostraram o Caipora perdendo vantagem nas partidas
+  longas (de +9,6 pp sobre o esperado até 30 lances para +1,2 pp acima de 80), e as séries da
+  CCRL (Amateur Series) jogam com tabelas de 5 peças. Conferência: 490 de 490 posições de 3 a 5
+  peças batem com a API de tablebase do Lichess (`tests/syzygy.rs`, teste ignorado com
+  `SYZYGY_PATH`).
+- **SPRT** (STC 8+0.08, [0, 5], mesmo executável, o lado novo com as tabelas WDL de 3 a 5 peças,
+  c7i.16xlarge, ~US$ 1,62): **+1,0 ± 1,8** em 31036 partidas, inconclusivo (LLR −0,44) quando a
+  máquina se desligou. No ritmo rápido quase nenhuma partida chega a um final de 5 peças logo
+  depois de uma captura; o efeito esperado é maior nos ritmos longos das listas. Entra **desligada
+  por padrão** (sem `SyzygyPath` nada muda); no bot fica desligada até medir em ritmo mais longo.
+- **Custo se estiver errada:** sem a DTZ, com a raiz já dentro das tabelas o motor joga sem elas
+  (resolvido pela busca normal e, no bot, pela tablebase online); a DTZ fica para depois se fizer
+  falta. As tabelas são carregadas inteiras na memória na primeira sondagem de cada material (até
+  ~380 MB com todas as de 5 peças). Uma leitura errada daria resultados falsos de vitória/derrota;
+  por isso o oráculo de 504 posições.

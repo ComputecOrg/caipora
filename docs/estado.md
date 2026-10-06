@@ -232,6 +232,10 @@
 
 ## Fila de melhorias
 
+- **Syzygy (D27):** leitura própria das tabelas WDL, opção `SyzygyPath`, desligada por padrão.
+  SPRT a 8+0.08: +1,0 ± 1,8 em 31036 (inconclusivo). Medir num ritmo mais longo antes de ligar no
+  bot; DTZ só se fizer falta.
+
 - Mudança de busca: SPRT de nós fixos (100 mil nós, 8moves_v3, [0, 10]), **com a rede nos dois
   lados**.
 - Mudança de tempo: SPRT de relógio a 8+0.08.

@@ -10,6 +10,7 @@ pub mod nnue;
 pub mod position;
 pub mod search;
 pub mod see;
+pub mod syzygy;
 pub mod timeman;
 pub mod tt;
 pub mod tune;
