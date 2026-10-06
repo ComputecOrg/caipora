@@ -415,6 +415,11 @@ Cada decisão: o que foi decidido, por quê e quanto custa se estiver errada.
   CCRL (Amateur Series) jogam com tabelas de 5 peças. Conferência: 490 de 490 posições de 3 a 5
   peças batem com a API de tablebase do Lichess (`tests/syzygy.rs`, teste ignorado com
   `SYZYGY_PATH`).
+- **SPRT** (STC 8+0.08, [0, 5], mesmo executável, o lado novo com as tabelas WDL de 3 a 5 peças,
+  c7i.16xlarge, ~US$ 1,62): **+1,0 ± 1,8** em 31036 partidas, inconclusivo (LLR −0,44) quando a
+  máquina se desligou. No ritmo rápido quase nenhuma partida chega a um final de 5 peças logo
+  depois de uma captura; o efeito esperado é maior nos ritmos longos das listas. Entra **desligada
+  por padrão** (sem `SyzygyPath` nada muda); no bot fica desligada até medir em ritmo mais longo.
 - **Custo se estiver errada:** sem a DTZ, com a raiz já dentro das tabelas o motor joga sem elas
   (resolvido pela busca normal e, no bot, pela tablebase online); a DTZ fica para depois se fizer
   falta. As tabelas são carregadas inteiras na memória na primeira sondagem de cada material (até
