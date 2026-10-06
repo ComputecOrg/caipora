@@ -169,6 +169,7 @@ impl Engine {
             "option name Clear Hash type button".to_string(),
             "option name EvalFile type string default <embedded>".to_string(),
             "option name Ponder type check default false".to_string(),
+            "option name SyzygyPath type string default <empty>".to_string(),
         ];
         for line in lines {
             self.out.line(&line);
@@ -215,6 +216,7 @@ impl Engine {
                 self.searcher_mut().clear();
             }
             "evalfile" => self.load_network(&value),
+            "syzygypath" => self.load_tablebases(&value),
             // Só avisa que a GUI pode mandar `go ponder`; quem liga o ponder é o próprio `go`.
             "ponder" => {}
             #[cfg(feature = "tune")]
@@ -231,6 +233,30 @@ impl Engine {
                 .out
                 .line(&format!("info string unknown option: {name}")),
         }
+    }
+
+    /// `SyzygyPath`: pastas com tabelas `.rtbw` (separadas por `;`, ou `:` fora do Windows);
+    /// vazio ou `<empty>` desliga a sondagem.
+    fn load_tablebases(&mut self, paths: &str) {
+        self.finish_search();
+        if paths.is_empty() || paths == "<empty>" {
+            self.searcher_mut().set_tablebases(None);
+            return;
+        }
+        let tablebases = crate::syzygy::Tablebases::open(paths);
+        if tablebases.is_empty() {
+            self.out
+                .line(&format!("info string no tablebases found in {paths}"));
+            self.searcher_mut().set_tablebases(None);
+            return;
+        }
+        self.out.line(&format!(
+            "info string found {} tablebases (up to {} pieces)",
+            tablebases.len(),
+            tablebases.max_pieces()
+        ));
+        self.searcher_mut()
+            .set_tablebases(Some(Arc::new(tablebases)));
     }
 
     /// `EvalFile`: `<embedded>` (o padrão) usa a rede do executável; `none` (ou vazio) volta à
@@ -583,6 +609,32 @@ mod tests {
         }
         assert_eq!(out.lines()[out.lines().len() - 2], "uciok");
         assert_eq!(out.lines().last().unwrap(), "readyok");
+    }
+
+    #[test]
+    fn syzygy_path_option_loads_the_tables() {
+        let (mut engine, out) = engine();
+        send(&mut engine, &["uci"]);
+        assert!(
+            out.text()
+                .contains("option name SyzygyPath type string default <empty>")
+        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/syzygy");
+        send(
+            &mut engine,
+            &[&format!("setoption name SyzygyPath value {path}")],
+        );
+        assert!(
+            out.text()
+                .contains("info string found 11 tablebases (up to 4 pieces)"),
+            "{}",
+            out.text()
+        );
+        send(
+            &mut engine,
+            &["setoption name SyzygyPath value C:/nao/existe"],
+        );
+        assert!(out.text().contains("info string no tablebases found"));
     }
 
     #[test]

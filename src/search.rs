@@ -12,6 +12,7 @@ use crate::moves::{MAX_MOVES, Move, MoveKind, MoveList};
 use crate::nnue::{Accumulators, Network, RefreshCache};
 use crate::position::Position;
 use crate::see::{SEE_VALUE, see};
+use crate::syzygy::{Tablebases, Wdl};
 use crate::timeman::{
     Limits, NEUTRAL_NODE_FRACTION, iteration_time_scale, should_start_iteration_scaled,
 };
@@ -24,6 +25,10 @@ pub const INFINITY: i32 = 32_000;
 pub const MATE: i32 = 31_000;
 /// Pontuações além disso são mate em até `MAX_PLY` meios-lances.
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
+/// Vitória pela tablebase a `ply` da raiz vale `TB_WIN - ply`: abaixo de todo mate e acima de
+/// toda avaliação. De `TB_BOUND` para cima (e para baixo do negativo) é resultado decidido.
+pub const TB_WIN: i32 = MATE_BOUND - 1;
+pub const TB_BOUND: i32 = TB_WIN - MAX_PLY as i32;
 
 // Margens, profundidades e fórmulas da poda, das reduções e dos históricos: parâmetros de
 // `tune.rs` (constantes no build normal, opções UCI com a feature `tune`, para o SPSA). O que
@@ -395,7 +400,7 @@ impl Corrections {
 /// O resultado da busca num nó diz para que lado a avaliação estática errou? Exato sempre diz;
 /// falha alta só quando passou da avaliação, falha baixa só quando ficou abaixo. Mate não conta.
 fn correction_applies(bound: Bound, best_score: i32, static_eval: i32) -> bool {
-    if best_score.abs() >= MATE_BOUND {
+    if best_score.abs() >= TB_BOUND {
         return false;
     }
     match bound {
@@ -522,6 +527,8 @@ pub struct Searcher {
     network: Option<Arc<Network>>,
     /// Ligado durante o `go ponder`: o relógio é do adversário até o `ponderhit` desligá-lo.
     pondering: Arc<AtomicBool>,
+    /// Tablebases Syzygy, se a pasta foi dada (`SyzygyPath`).
+    tablebases: Option<Arc<Tablebases>>,
 }
 
 impl Searcher {
@@ -532,7 +539,13 @@ impl Searcher {
             helpers: Vec::new(),
             network: None,
             pondering: Arc::new(AtomicBool::new(false)),
+            tablebases: None,
         }
+    }
+
+    /// Troca as tablebases (`None` desliga a sondagem).
+    pub fn set_tablebases(&mut self, tablebases: Option<Arc<Tablebases>>) {
+        self.tablebases = tablebases;
     }
 
     /// Sinal de ponder (ver `pondering`), para a UCI ligar no `go ponder` e desligar no
@@ -606,8 +619,14 @@ impl Searcher {
             helpers,
             network,
             pondering,
+            tablebases,
         } = self;
         let (tt, network, pondering) = (&*tt, network.as_deref(), &**pondering);
+        // Só sonda quando a raiz ainda não está nas tabelas: com a raiz dentro, a WDL sozinha não
+        // diz como progredir (isso pede a DTZ), e a busca normal resolve.
+        let tablebases = tablebases
+            .as_deref()
+            .filter(|tb| root.occupied().count() as usize > tb.max_pieces());
         let helpers_stop = AtomicBool::new(false);
         std::thread::scope(|scope| {
             let workers: Vec<_> = helpers
@@ -621,6 +640,7 @@ impl Searcher {
                                 tt,
                                 tables,
                                 network,
+                                tablebases,
                                 root,
                                 history,
                                 limits,
@@ -634,7 +654,9 @@ impl Searcher {
                 })
                 .collect();
 
-            let mut state = new_state(tt, main, network, root, history, limits, stop, pondering);
+            let mut state = new_state(
+                tt, main, network, tablebases, root, history, limits, stop, pondering,
+            );
             let mut best = SearchResult {
                 best_move: Some(first_move),
                 score: 0,
@@ -711,6 +733,7 @@ impl Searcher {
             &self.tt,
             &mut self.main,
             network,
+            None,
             root,
             history,
             limits,
@@ -727,6 +750,7 @@ fn new_state<'a>(
     tt: &'a TranspositionTable,
     tables: &'a mut ThreadTables,
     network: Option<&'a Network>,
+    tablebases: Option<&'a Tablebases>,
     root: &Position,
     history: &[u64],
     limits: &'a Limits,
@@ -742,6 +766,7 @@ fn new_state<'a>(
         }),
         refresh_cache: network.map(RefreshCache::new),
         network,
+        tablebases,
         tt,
         history: &mut tables.history,
         continuation: &mut tables.continuation,
@@ -782,6 +807,8 @@ fn root_move_index(mv: Move) -> usize {
 /// Estado de uma busca em andamento.
 struct SearchState<'a> {
     tt: &'a TranspositionTable,
+    /// Tablebases a sondar nesta busca (`None` sem tabelas ou com a raiz já dentro delas).
+    tablebases: Option<&'a Tablebases>,
     history: &'a mut History,
     continuation: &'a mut ContinuationHistory,
     captures: &'a mut CaptureHistory,
@@ -996,6 +1023,54 @@ impl SearchState<'_> {
             }
         }
 
+        // Tablebase: logo depois de um lance que zera o contador dos 50 lances (captura ou peão),
+        // a WDL da tabela é exata. O resultado vai para a TT com profundidade folgada. Sem corte,
+        // num nó PV, a vitória vira piso do resultado e a derrota, teto (a busca ainda escolhe o
+        // lance e pode achar um mate).
+        let mut tb_floor = None;
+        let mut tb_cap = None;
+        if ply > 0
+            && excluded.is_none()
+            && let Some(tb) = self.tablebases
+            && pos.halfmove_clock() == 0
+            && pos.occupied().count() as usize <= tb.max_pieces()
+            && let Some(wdl) = tb.probe_wdl(pos)
+        {
+            let (score, bound) = match wdl {
+                Wdl::Win => (TB_WIN - ply as i32, Bound::Lower),
+                Wdl::Loss => (-TB_WIN + ply as i32, Bound::Upper),
+                Wdl::CursedWin => (1, Bound::Exact),
+                Wdl::BlessedLoss => (-1, Bound::Exact),
+                Wdl::Draw => (0, Bound::Exact),
+            };
+            let cutoff = match bound {
+                Bound::Exact => true,
+                Bound::Lower => score >= beta,
+                Bound::Upper => score <= alpha,
+            };
+            if cutoff {
+                let stored_depth = (depth + 6).min(MAX_PLY as i32 - 1);
+                self.tt.store(
+                    pos.hash(),
+                    None,
+                    score_to_tt(score, ply),
+                    stored_depth,
+                    bound,
+                );
+                return score;
+            }
+            if pv_node {
+                match bound {
+                    Bound::Lower => {
+                        tb_floor = Some(score);
+                        alpha = alpha.max(score);
+                    }
+                    Bound::Upper => tb_cap = Some(score),
+                    Bound::Exact => {}
+                }
+            }
+        }
+
         let us = pos.side_to_move();
         // Avaliação estática, já corrigida; em xeque não existe (a posição não é "parada").
         let raw_eval = if in_check {
@@ -1017,7 +1092,7 @@ impl SearchState<'_> {
             depth -= 1;
         }
 
-        if !pv_node && !in_check && ply > 0 && excluded.is_none() && beta.abs() < MATE_BOUND {
+        if !pv_node && !in_check && ply > 0 && excluded.is_none() && beta.abs() < TB_BOUND {
             // Reverse futility: tão acima de beta que nem uma perda de `margem` por nível muda nada.
             if depth <= tune::rfp_max_depth() && static_eval - tune::rfp_margin() * depth >= beta {
                 return static_eval;
@@ -1054,7 +1129,7 @@ impl SearchState<'_> {
                 }
                 if score >= beta {
                     // Mate achado depois de passar a vez não é prova de mate.
-                    return if score >= MATE_BOUND { beta } else { score };
+                    return if score >= TB_BOUND { beta } else { score };
                 }
             }
         }
@@ -1104,7 +1179,7 @@ impl SearchState<'_> {
                 && ply < 2 * self.root_depth as usize
                 && entry.depth >= depth - tune::singular_tt_depth_margin()
                 && entry.bound != Bound::Upper
-                && score_from_tt(entry.score, ply).abs() < MATE_BOUND
+                && score_from_tt(entry.score, ply).abs() < TB_BOUND
             {
                 let singular_beta =
                     score_from_tt(entry.score, ply) - tune::singular_margin() * depth;
@@ -1129,7 +1204,7 @@ impl SearchState<'_> {
                 }
             }
             let mut new_depth = depth - 1 + extension;
-            let prunable = !pv_node && !in_check && best_score > -MATE_BOUND && !next.in_check();
+            let prunable = !pv_node && !in_check && best_score > -TB_BOUND && !next.in_check();
             if prunable && depth <= tune::see_prune_max_depth() {
                 // Lance que, na troca de peças na casa de destino, perde material demais para a
                 // profundidade que resta.
@@ -1264,6 +1339,12 @@ impl SearchState<'_> {
         if excluded.is_some() {
             // Resultado sem o melhor lance: não vale para a TT nem para a correção.
             return best_score;
+        }
+        if let Some(floor) = tb_floor {
+            best_score = best_score.max(floor);
+        }
+        if let Some(cap) = tb_cap {
+            best_score = best_score.min(cap);
         }
         let bound = if best_score >= beta {
             Bound::Lower
@@ -1408,7 +1489,7 @@ impl SearchState<'_> {
             }
             None => evaluate(pos),
         };
-        score.clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        score.clamp(-TB_BOUND + 1, TB_BOUND - 1)
     }
 
     /// Prepara a camada oculta do nível seguinte, `next`, para o lance `mv`.
@@ -1430,7 +1511,7 @@ impl SearchState<'_> {
     fn corrected_eval(&self, pos: &Position, raw: i32, ply: usize) -> i32 {
         let keys = self.correction_keys(pos, ply);
         let correction = self.correction.get(pos.side_to_move(), &keys);
-        (raw + correction).clamp(-MATE_BOUND + 1, MATE_BOUND - 1)
+        (raw + correction).clamp(-TB_BOUND + 1, TB_BOUND - 1)
     }
 
     fn correction_keys(&self, pos: &Position, ply: usize) -> CorrectionKeys {
@@ -1640,11 +1721,11 @@ pub fn uci_score(score: i32) -> String {
     }
 }
 
-/// Mates são guardados na TT relativos à posição, não à raiz.
+/// Mates e resultados de tablebase são guardados na TT relativos à posição, não à raiz.
 fn score_to_tt(score: i32, ply: usize) -> i32 {
-    if score >= MATE_BOUND {
+    if score >= TB_BOUND {
         score + ply as i32
-    } else if score <= -MATE_BOUND {
+    } else if score <= -TB_BOUND {
         score - ply as i32
     } else {
         score
@@ -1652,9 +1733,9 @@ fn score_to_tt(score: i32, ply: usize) -> i32 {
 }
 
 fn score_from_tt(score: i32, ply: usize) -> i32 {
-    if score >= MATE_BOUND {
+    if score >= TB_BOUND {
         score - ply as i32
-    } else if score <= -MATE_BOUND {
+    } else if score <= -TB_BOUND {
         score + ply as i32
     } else {
         score
@@ -1670,6 +1751,48 @@ mod tests {
         let pos = Position::from_fen(fen).unwrap();
         let mut searcher = Searcher::new(16);
         searcher.search(&pos, &[], &limits, &AtomicBool::new(false), &mut |_| {})
+    }
+
+    fn fixture_tablebases() -> Arc<crate::syzygy::Tablebases> {
+        Arc::new(crate::syzygy::Tablebases::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/syzygy"
+        )))
+    }
+
+    #[test]
+    fn tablebases_show_the_winning_capture_at_low_depth() {
+        // Dxc5 entra num final de dama contra torre ganho (4 peças, na tablebase); sem a
+        // tablebase, uma busca de profundidade 3 não teria como saber.
+        let pos = Position::from_fen("8/r6k/8/2p5/3Q4/8/8/6K1 w - - 0 1").unwrap();
+        let mut searcher = Searcher::new(16);
+        searcher.set_tablebases(Some(fixture_tablebases()));
+        let result = searcher.search(&pos, &[], &depth(3), &AtomicBool::new(false), &mut |_| {});
+        assert!(result.score >= TB_BOUND, "pontuação {}", result.score);
+        assert_eq!(
+            result.best_move.map(|m| m.to_uci(false)),
+            Some("d4c5".to_string())
+        );
+    }
+
+    #[test]
+    fn tablebases_are_not_probed_when_the_root_is_already_in_them() {
+        // A raiz já tem 4 peças: a busca joga sem sondar (sem a DTZ ela não saberia progredir).
+        let pos = Position::from_fen("8/r6k/8/2Q5/8/8/8/6K1 b - - 0 1").unwrap();
+        let mut searcher = Searcher::new(16);
+        searcher.set_tablebases(Some(fixture_tablebases()));
+        let result = searcher.search(&pos, &[], &depth(3), &AtomicBool::new(false), &mut |_| {});
+        assert!(result.score.abs() < TB_BOUND, "pontuação {}", result.score);
+    }
+
+    #[test]
+    fn tablebase_scores_are_stored_relative_to_the_node() {
+        for ply in [0usize, 3, 40] {
+            for score in [TB_WIN - 5, -(TB_WIN - 9)] {
+                assert_eq!(score_from_tt(score_to_tt(score, ply), ply), score);
+            }
+        }
+        assert_eq!(score_to_tt(TB_WIN - 5, 3), TB_WIN - 2);
     }
 
     fn depth(d: u32) -> Limits {
